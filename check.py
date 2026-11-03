@@ -10,11 +10,13 @@ TARGETS = [
     {
         "movie": "Dune Part Three",
         "hall": "IMAX",
+        "query": "site:egy.voxcinemas.com/showtimes c=city-centre-almaza dune",
         "direct_link": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=dune-part-three"
     },
     {
         "movie": "Avengers Doomsday",
         "hall": "MAX",
+        "query": "site:egy.voxcinemas.com/showtimes c=city-centre-almaza avengers",
         "direct_link": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=avengers-doomsday-infinity-vision"
     }
 ]
@@ -44,17 +46,21 @@ def check_booking():
         for target in TARGETS:
             movie_name = target["movie"]
             hall_type = target["hall"]
-            target_url = target["direct_link"]
+            query = target["query"]
+            direct_link = target["direct_link"]
+            search_url = f"https://html.duckduckgo.com/html/?q={query}"
             
             try:
-                print(f"⏳ جاري فحص الرابط المباشر لفيلم {movie_name} صالة {hall_type}...")
-                response = session.get(target_url, timeout=15)
+                print(f"⏳ جاري مراقبة أسبوع جديد لفيلم {movie_name} صالة {hall_type}...")
+                response = session.get(search_url, timeout=10)
                 response.raise_for_status()
                 page_content = response.text.lower()
                 
-                # حساب بصمة لمحتوى صفحة السينما الرسمية مباشرة
+                # استخراج جزء من النص المتعلق بالمواعيد لحساب بصمة له
+                # البصمة (Hash) دي بتمثل شكل الصفحة الحالي بالحفلات الحالية
                 current_hash = hashlib.md5(page_content.encode('utf-8')).hexdigest()
                 
+                # ملف محلي لتخزين آخر بصمة تم رصدها لكل فيلم عشان يقارن بيها
                 hash_file = f"hash_{movie_name.replace(' ', '_')}.txt"
                 
                 previous_hash = ""
@@ -62,32 +68,34 @@ def check_booking():
                     with open(hash_file, "r") as f:
                         previous_hash = f.read().strip()
                 
+                # لو دي أول مرة يشتغل أو مفيش ملف سابق، نحفظ البصمة الحالية بس من غير تنبيه
                 if not previous_hash:
                     with open(hash_file, "w") as f:
                         f.write(current_hash)
-                    print(f"📌 تم حفظ الحالة الحالية لفيلم {movie_name} كمرجع مباشر، بانتظار التجديد.")
+                    print(f"📌 تم حفظ الحالة الحالية لفيلم {movie_name} كمرجع، بانتظار أي تغيير جديد.")
                     continue
                 
-                # لو محتوى الصفحة اتغير (نزلت حفلات الأسبوع التاني أو التذاكر فتحت)
+                # الشرط السحري: لو البصمة اتغيرت (يعني الموقع حدث جدوله ونزل الأسبوع التاني)
                 if current_hash != previous_hash:
                     alert_msg = (
                         f"🚨 **تنبيه عاجل: تم رصد جدول / تذاكر جديدة!** 🚨\n\n"
                         f"🎬 الفيلم: **{movie_name}**\n"
                         f"🎦 الصالة المستهدفة: **{hall_type}**\n\n"
-                        f"✨ موقع السينما قام بتحديث مواعيد الحفلات على الرابط المباشر!\n"
-                        f"🔗 [اضغط هنا لفتح الحجز فوراً]({target_url})"
+                        f"✨ موقع السينما قام بتحديث مواعيد الحفلات (احتمال نزول تذاكر الأسبوع الجديد)!\n"
+                        f"🔗 [اضغط هنا لفتح الحجز فوراً]({direct_link})"
                     )
                     send_telegram_message(session, alert_msg)
                     
+                    # نحدث البصمة المخزنة عشان ميبعتش تاني لنفس التحديث
                     with open(hash_file, "w") as f:
                         f.write(current_hash)
                         
-                    print(f"✅ تم اكتشاف تغيير مباشر في جدول {movie_name} وإرسال التنبيه!")
+                    print(f"✅ تم اكتشاف تغيير في جدول {movie_name} وإرسال التنبيه وتحديث البصمة.")
                 else:
-                    print(f"⏳ لا يوجد تغيير في صفحة فيلم '{movie_name}' حتى الآن، البوت صامت.")
+                    print(f"⏳ لا يوجد أي تغيير في مواعيد فيلم '{movie_name}' حتى الآن، البوت صامت.")
                     
             except Exception as e:
-                print(f"❌ خطأ أثناء فحص الرابط المباشر للفيلم {movie_name}: {e}")
+                print(f"❌ خطأ أثناء الفحص للفيلم {movie_name}: {e}")
             
             time.sleep(2)
 
