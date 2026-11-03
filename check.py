@@ -1,40 +1,20 @@
-#!/usr/bin/env python3
-"""
-Vox Cinemas showtime monitor - City Centre Almaza.
-Optimized for continuous background execution (Cron Job / GitHub Actions).
-"""
-
-import argparse
-import hashlib
-import json
-import logging
 import os
 import re
-import sys
+import json
 import time
-from datetime import datetime
-from urllib.parse import urljoin
-
+import hashlib
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
 
 # =====================================
-# SETTINGS
+# TELEGRAM SETTINGS
 # =====================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-STATE_FILE = os.getenv("STATE_FILE", "showtimes_state.json")
-LOG_FILE = os.getenv("LOG_FILE", "showtimes.log")
-DEBUG_DIR = "debug"
-
-CINEMA_NAME = "Vox City Centre Almaza"
-DDG_URL = "https://html.duckduckgo.com/html/"
-
-REQUEST_TIMEOUT = 15
-RETRIES = 2
-MAX_BLOCK_CHARS = 2500
+STATE_FILE = "showtimes_state.json"
 
 HEADERS = {
     "User-Agent": (
@@ -42,7 +22,7 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8"
 }
 
 # =====================================
@@ -52,397 +32,276 @@ HEADERS = {
 TARGETS = [
     {
         "movie": "Dune: Part Three",
-        "keyword": "dune",
         "hall": "IMAX",
         "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=dune-part-three",
-        "fallback_query": "site:egy.voxcinemas.com/showtimes city-centre-almaza dune imax schedule",
+        "fallback_query": "site:egy.voxcinemas.com dune almaza imax"
     },
     {
         "movie": "Avengers: Doomsday",
-        "keyword": "avengers",
         "hall": "MAX",
         "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=avengers-doomsday-infinity-vision",
-        "fallback_query": "site:egy.voxcinemas.com/showtimes city-centre-almaza avengers max schedule",
-    },
+        "fallback_query": "site:egy.voxcinemas.com avengers almaza max"
+    }
 ]
 
 # =====================================
-# PATTERNS
+# DETECTION PATTERNS
 # =====================================
-
-MONTH = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*"
-WEEKDAY = r"(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*"
 
 DATE_PATTERN = re.compile(
     r"\b(?:"
-    + r"\d{4}-\d{1,2}-\d{1,2}|"
-    + r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|"
-    + WEEKDAY + r"\.?\s*,?\s*" + MONTH + r"\.?\s+\d{1,2}|"
-    + MONTH + r"\.?\s+\d{1,2}|"
-    + r"\d{1,2}\s+" + MONTH
-    + r")\b",
-    re.I,
+    r"\d{4}-\d{1,2}-\d{1,2}|"
+    r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|"
+    r"(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\s*,?\s*"
+    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}|"
+    r"\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*"
+    r")\b",
+    re.I
 )
 
 TIME_PATTERN = re.compile(
     r"\b(?:[01]?\d|2[0-3]):[0-5]\d\s*(?:am|pm)?\b"
     r"|\b(?:1[0-2]|0?[1-9])\s*(?:am|pm)\b",
-    re.I,
+    re.I
 )
-
-HALL_PATTERN = re.compile(r"\b(IMAX|MAX|STANDARD|4DX|GOLD|LUXE|VIP|ATMOS)\b", re.I)
 
 BOOKING_PATTERN = re.compile(
-    r"\b(book now|book tickets|buy tickets|select seats|choose seats|book|buy|tickets|select)\b",
-    re.I,
+    r"\b(book now|book tickets|select seats|choose seats|"
+    r"book|tickets|select)\b",
+    re.I
 )
 
-log = logging.getLogger("vox")
-
-
-class FetchError(Exception):
-    pass
-
-
 # =====================================
-# NETWORK
-# =====================================
-
-def fetch(session, url, params=None):
-    last_error = "unknown error"
-
-    for attempt in range(RETRIES + 1):
-        try:
-            response = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
-            # الاعتماد على 200 للتأكد من نظافة الصفحة وعدم قبول ردود الحماية الوهمية
-            if response.status_code == 200 and len(response.text) > 500:
-                return response.text
-            last_error = f"HTTP {response.status_code}, {len(response.text)} chars"
-        except requests.RequestException as error:
-            last_error = str(error)
-
-        if attempt < RETRIES:
-            time.sleep(3 * (attempt + 1))
-
-    raise FetchError(last_error)
-
-
-def send_telegram(session, message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True
-    }
-
-    for _ in range(3):
-        try:
-            response = session.post(url, json=payload, timeout=20)
-
-            if response.status_code == 429:
-                retry_after = 5
-                try:
-                    retry_after = response.json().get("parameters", {}).get("retry_after", 5)
-                except ValueError:
-                    pass
-                log.warning("Telegram rate limit hit. Waiting %s seconds.", retry_after)
-                time.sleep(retry_after)
-                continue
-
-            if response.status_code == 200 and response.json().get("ok"):
-                return True
-
-            log.error("Telegram rejected the message: %s", response.text[:300])
-            return False
-
-        except (requests.RequestException, ValueError) as error:
-            log.error("Telegram request failed: %s", error)
-            time.sleep(3)
-
-    return False
-
-
-# =====================================
-# STATE
+# LOAD AND SAVE MONITORING DATA
 # =====================================
 
 def load_state():
     if not os.path.exists(STATE_FILE):
-        return {"notified": {}}
+        return {}
 
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as file:
-            data = json.load(file)
-    except (json.JSONDecodeError, OSError) as error:
-        log.warning("Could not read %s (%s). Starting with an empty state.", STATE_FILE, error)
-        return {"notified": {}}
-
-    if "notified" not in data:
-        notified = {}
-        for value in data.values():
-            if isinstance(value, dict):
-                notified.update(value)
-        data = {"notified": notified}
-
-    return data
+            return json.load(file)
+    except (json.JSONDecodeError, OSError):
+        print("⚠️ Could not read saved state.")
+        return {}
 
 
 def save_state(state):
     temp_file = STATE_FILE + ".tmp"
+
     with open(temp_file, "w", encoding="utf-8") as file:
         json.dump(state, file, ensure_ascii=False, indent=2)
+
     os.replace(temp_file, STATE_FILE)
 
 
 # =====================================
-# PARSING
+# TELEGRAM NOTIFICATIONS
 # =====================================
 
-def find_booking_link(block, base_url):
-    for link in block.find_all("a", href=True):
-        href = urljoin(base_url, link["href"])
-        label = link.get_text(" ", strip=True)
-        if BOOKING_PATTERN.search(label) or "book" in href.lower() or "seat" in href.lower():
-            return href
-    return base_url
+def send_telegram(session, message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message,
+        "disable_web_page_preview": True
+    }
+
+    try:
+        response = session.post(url, json=payload, timeout=20)
+        response.raise_for_status()
+
+        if response.json().get("ok"):
+            print("✅ Telegram notification sent.")
+            return True
+
+        print("❌ Telegram rejected the message.")
+        return False
+
+    except requests.RequestException as error:
+        print(f"❌ Telegram error: {error}")
+        return False
 
 
-def next_hall_after(events, index):
-    for _, kind, value in events[index + 1:]:
-        if kind == "date":
-            break
-        if kind == "hall":
-            return value
-    return None
+# =====================================
+# HALL DETECTION
+# =====================================
+
+def hall_matches(text, hall):
+    if hall == "IMAX":
+        return bool(re.search(r"\bIMAX\b", text, re.I))
+    return bool(re.search(r"\bMAX\b", text, re.I))
 
 
-def parse_block(text, target):
-    events = []
-    for match in DATE_PATTERN.finditer(text):
-        events.append((match.start(), "date", " ".join(match.group().split())))
-    for match in HALL_PATTERN.finditer(text):
-        events.append((match.start(), "hall", match.group().upper()))
-    for match in TIME_PATTERN.finditer(text):
-        events.append((match.start(), "time", " ".join(match.group().split())))
-    events.sort(key=lambda event: event[0])
+# =====================================
+# EXTRACT ACTUAL SHOWTIME CANDIDATES
+# =====================================
 
-    halls_here = {value for _, kind, value in events if kind == "hall"}
-    if target["hall"] not in halls_here:
-        return []
-
-    results = []
-    current_date = None
-    last_hall = None
-
-    for index, (_, kind, value) in enumerate(events):
-        if kind == "date":
-            current_date, last_hall = value, None
-        elif kind == "hall":
-            last_hall = value
-        elif current_date:
-            hall = last_hall or next_hall_after(events, index)
-            if hall == target["hall"]:
-                results.append((current_date, value))
-
-    return results
-
-
-def extract_showtimes(html, target, from_fallback=False):
+def extract_showtimes(html, target):
     soup = BeautifulSoup(html, "html.parser")
+
     for element in soup(["script", "style", "noscript", "svg"]):
         element.decompose()
 
-    blocks = soup.find_all(["div", "li", "article", "section", "tr", "ul", "table"])
-    blocks.sort(key=lambda tag: len(tag.get_text(" ", strip=True)))
+    candidates = soup.find_all(["div", "li", "article", "section"])
+    candidates.sort(key=lambda tag: len(tag.get_text(" ", strip=True)))
 
-    keyword = target["keyword"].lower()
     found = {}
 
-    for block in blocks:
-        text = block.get_text(" ", strip=True)
-        if not text or len(text) > MAX_BLOCK_CHARS:
+    for tag in candidates:
+        text = tag.get_text(" ", strip=True)
+
+        if not text or len(text) > 1800:
             continue
 
-        if from_fallback and keyword not in text.lower():
+        if not hall_matches(text, target["hall"]):
             continue
 
-        times = parse_block(text, target)
-        if not times:
+        dates = DATE_PATTERN.findall(text)
+        times = TIME_PATTERN.findall(text)
+
+        if not dates or not times:
             continue
 
-        if from_fallback:
-            link = target["url"]
-        else:
-            link = find_booking_link(block, target["url"])
-            if link == target["url"] and not BOOKING_PATTERN.search(text):
-                continue
+        booking_links = []
+        for link in tag.find_all("a", href=True):
+            href = urljoin(target["url"], link["href"])
+            label = link.get_text(" ", strip=True)
 
-        for date_value, time_value in times:
-            raw = f"{CINEMA_NAME}|{target['movie']}|{target['hall']}|{date_value}|{time_value}"
-            showtime_id = hashlib.sha256(raw.lower().encode("utf-8")).hexdigest()
+            if (
+                BOOKING_PATTERN.search(label)
+                or "book" in href.lower()
+                or "seat" in href.lower()
+            ):
+                booking_links.append(href)
 
-            found.setdefault(showtime_id, {
-                "movie": target["movie"],
-                "hall": target["hall"],
-                "cinema": CINEMA_NAME,
-                "date": date_value,
-                "time": time_value,
-                "link": link,
-                "source": "search fallback" if from_fallback else "Vox page",
-            })
+        if not BOOKING_PATTERN.search(text) and not booking_links:
+            continue
+
+        date_value = dates[0].strip()
+        time_value = times[0].strip()
+        booking_link = booking_links[0] if booking_links else target["url"]
+
+        unique_text = f"{target['movie']}|{target['hall']}|{date_value}|{time_value}"
+        showtime_id = hashlib.sha256(unique_text.lower().encode("utf-8")).hexdigest()
+
+        found[showtime_id] = {
+            "movie": target["movie"],
+            "hall": target["hall"],
+            "date": date_value,
+            "time": time_value,
+            "link": booking_link
+        }
 
     return found
 
 
 # =====================================
-# CHECKING
+# CHECK TARGET (WITH FALLBACK)
 # =====================================
 
-def save_debug(name, html):
-    os.makedirs(DEBUG_DIR, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(DEBUG_DIR, f"{name}_{stamp}.html")
-    with open(path, "w", encoding="utf-8") as file:
-        file.write(html)
-    log.info("Saved debug HTML to %s", path)
-
-
-def check_target(session, target, debug=False):
-    log.info("Checking %s (%s)...", target["movie"], target["hall"])
-    safe_name = re.sub(r"\W+", "_", target["movie"]).strip("_")
+def check_target(session, target):
+    print(f"\n⏳ Checking {target['movie']} ({target['hall']})...")
+    html = ""
+    success = False
 
     try:
-        html = fetch(session, target["url"])
-        if debug:
-            save_debug(f"{safe_name}_vox", html)
+        response = session.get(target["url"], timeout=15)
+        if response.status_code == 200 and len(response.text) > 500:
+            html = response.text
+            success = True
+            print("🎯 Direct fetch successful.")
+    except Exception:
+        print("⚠️ Direct fetch blocked/timeout, switching to smart search fallback...")
 
-        showtimes = extract_showtimes(html, target)
-        if showtimes:
-            log.info("Vox page: %d showtime(s).", len(showtimes))
-            return showtimes
+    if not success:
+        try:
+            search_url = f"https://html.duckduckgo.com/html/?q={target['fallback_query']}"
+            response = session.get(search_url, timeout=15)
+            # السماح بكود 202 في استجابة البحث لتجنب انهيار الفحص
+            if response.status_code in (200, 202) and len(response.text) > 300:
+                html = response.text
+                success = True
+                print("🔍 Fallback search fetch successful.")
+            else:
+                print(f"❌ Search fallback returned HTTP {response.status_code}")
+        except requests.RequestException as error:
+            print(f"❌ Connection error on fallback: {error}")
+            return None
 
-        log.info("Vox page loaded but no showtimes matched. Trying search fallback.")
-    except FetchError as error:
-        log.warning("Vox page failed (%s). Trying search fallback.", error)
-
-    try:
-        html = fetch(session, DDG_URL, params={"q": target["fallback_query"]})
-        if debug:
-            save_debug(f"{safe_name}_search", html)
-
-        showtimes = extract_showtimes(html, target, from_fallback=True)
-        log.info("Search fallback: %d showtime(s).", len(showtimes))
-        return showtimes
-    except FetchError as error:
-        log.error("Search fallback also failed (%s).", error)
+    if not success or len(html) < 200:
+        print("⚠️ Invalid or empty page content.")
         return None
 
-
-def build_message(movie, hall, items):
-    title = "🚨 *NEW VOX SHOWTIMES DETECTED!*" if len(items) > 1 else "🚨 *NEW VOX SHOWTIME DETECTED!*"
-
-    lines = [title, "", f"🎬 *Movie:* {movie}", f"🎦 *Hall:* {hall}", f"🏛️ *Cinema:* {CINEMA_NAME}", ""]
-    lines += [f"📅 {item['date']} at 🕒 {item['time']}" for item in items]
-
-    links = sorted({item["link"] for item in items})
-    lines += ["", "🎟️ *Booking:*"] + links
-
-    if any(item["source"] != "Vox page" for item in items):
-        lines += ["", "⚠️ _Note: Detected via search fallback. Confirm on Vox site before booking._"]
-
-    return "\n".join(lines)
+    showtimes = extract_showtimes(html, target)
+    print(f"🎯 Found {len(showtimes)} potential showtimes.")
+    return showtimes
 
 
-def run_once(session, state, dry_run=False, debug=False):
+# =====================================
+# MAIN MONITORING SYSTEM
+# =====================================
+
+def main():
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("❌ Missing Telegram credentials.")
+        return
+
+    state = load_state()
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    # 🚀 رسالة اختبارية لتأكيد عمل البوت وتوصيل الإشعارات فوراً عند بدء التشغيل
+    send_telegram(
+        session,
+        "🤖 **تم تشغيل نظام مراقبة فوكس سينما بنجاح!**\n\n"
+        "✨ البوت يعمل الآن في الخلفية وجاهز لإرسال التنبيهات فور نزول الحفلات."
+    )
+
     for target in TARGETS:
-        try:
-            showtimes = check_target(session, target, debug)
-        except Exception:
-            log.exception("Error while checking %s", target["movie"])
-            continue
+        showtimes = check_target(session, target)
 
         if showtimes is None:
             continue
 
-        if dry_run:
-            log.info("[dry run] %s: %d showtime(s)", target["movie"], len(showtimes))
-            continue
+        movie_key = target["movie"]
+        if movie_key not in state:
+            state[movie_key] = {}
 
-        notified = state["notified"]
-        new_items = {sid: item for sid, item in showtimes.items() if sid not in notified}
-        log.info("%s: %d showtime(s) found, %d new.", target["movie"], len(showtimes), len(new_items))
+        previous = state[movie_key]
+        new_ids = set(showtimes.keys()) - set(previous.keys())
 
-        if new_items:
-            message = build_message(target["movie"], target["hall"], list(new_items.values()))
+        for showtime_id in new_ids:
+            item = showtimes[showtime_id]
+
+            message = (
+                "🚨 **NEW VOX SHOWTIME DETECTED!** 🚨\n\n"
+                f"🎬 Movie: {item['movie']}\n"
+                f"🎦 Hall: {item['hall']}\n"
+                f"📅 Date: {item['date']}\n"
+                f"🕒 Time: {item['time']}\n\n"
+                "🎟️ **Booking link:**\n"
+                f"{item['link']}"
+            )
 
             if send_telegram(session, message):
-                now = datetime.now().isoformat(timespec="minutes")
-                for sid, item in new_items.items():
-                    item["first_seen"] = now
-                    notified[sid] = item
+                state[movie_key][showtime_id] = item
                 save_state(state)
-            else:
-                log.error("Telegram send failed for %s.", target["movie"])
+
+            time.sleep(2)
+
+        if not new_ids:
+            print(f"⏳ No new showtimes for {movie_key}.")
 
         time.sleep(3)
 
-
-# =====================================
-# MAIN
-# =====================================
-
-def main():
-    parser = argparse.ArgumentParser(description="Vox City Centre Almaza showtime monitor.")
-    parser.add_argument("--interval", type=int, default=0, metavar="SECONDS")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--test-telegram", action="store_true")
-    parser.add_argument("--debug", action="store_true")
-    args = parser.parse_args()
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[
-            logging.FileHandler(LOG_FILE, encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
-    )
-
-    if not args.dry_run and not (TELEGRAM_TOKEN and CHAT_ID):
-        log.error("Missing TELEGRAM_TOKEN or CHAT_ID environment variables.")
-        sys.exit(1)
-
-    session = requests.Session()
-    session.headers.update(HEADERS)
-
-    # اختبار التيليجرام يدويًا فقط لو طلبنا الأرجيومنت ده
-    if args.test_telegram:
-        ok = send_telegram(
-            session,
-            f"🧪 *Test from Vox monitor at* `{datetime.now():%Y-%m-%d %H:%M}`. Telegram is connected.",
-        )
-        log.info("Test message %s.", "sent" if ok else "FAILED")
-        sys.exit(0 if ok else 1)
-
-    state = load_state()
-
-    if args.interval <= 0:
-        run_once(session, state, args.dry_run, args.debug)
-        return
-
-    log.info("Checking every %d seconds. Press Ctrl+C to stop.", args.interval)
-    try:
-        while True:
-            try:
-                run_once(session, state, args.dry_run, args.debug)
-            except Exception:
-                log.exception("Unexpected error in this cycle.")
-            time.sleep(args.interval)
-    except KeyboardInterrupt:
-        log.info("Stopped.")
+    save_state(state)
+    session.close()
+    print("\n✅ Monitoring completed.")
 
 
 if __name__ == "__main__":
     main()
-        
+    
