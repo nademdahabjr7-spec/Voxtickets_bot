@@ -5,7 +5,7 @@ import requests
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-MOVIES_TO_CHECK = ["Dune 3", "Avengers: Doomsday"]
+MOVIES_TO_CHECK = ["Dune 3", "Avengers: Doomsday infinity vision"]
 
 
 def send_telegram_message(message):
