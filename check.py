@@ -10,8 +10,8 @@ from bs4 import BeautifulSoup
 URL = "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza"  # رابط صفحة السينما
 MOVIE_LINK_SELECTOR = 'a[href*="/movie-details/"]'  # طريقة الوصول لروابط الأفلام في الموقع
 WATCHED_MOVIES = [
-    "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=avengers-doomsday-infinity-vision",
-    "اhttps://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=dune-part-three",
+    "Avengers Doomsday",
+    "Dune part three",
 ]
 TOKEN = os.environ["TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
