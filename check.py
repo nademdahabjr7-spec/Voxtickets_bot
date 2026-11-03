@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import hashlib
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -9,13 +10,13 @@ TARGETS = [
     {
         "movie": "Dune Part Three",
         "hall": "IMAX",
-        "query": "site:egy.voxcinemas.com dune imax",
+        "query": "site:egy.voxcinemas.com/showtimes c=city-centre-almaza dune",
         "direct_link": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=dune-part-three"
     },
     {
         "movie": "Avengers Doomsday",
         "hall": "MAX",
-        "query": "site:egy.voxcinemas.com avengers max",
+        "query": "site:egy.voxcinemas.com/showtimes c=city-centre-almaza avengers",
         "direct_link": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=avengers-doomsday-infinity-vision"
     }
 ]
@@ -39,7 +40,6 @@ def check_booking():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
     }
     
-    # استخدام Session لتوحيد الاتصال وتسريع الطلبات
     with requests.Session() as session:
         session.headers.update(headers)
         
@@ -51,38 +51,51 @@ def check_booking():
             search_url = f"https://html.duckduckgo.com/html/?q={query}"
             
             try:
-                print(f"⏳ جاري فحص توفر فيلم {movie_name} صالة {hall_type}...")
+                print(f"⏳ جاري مراقبة أسبوع جديد لفيلم {movie_name} صالة {hall_type}...")
                 response = session.get(search_url, timeout=10)
                 response.raise_for_status()
                 page_content = response.text.lower()
                 
-                # يمكنك تعديل هذا المتغير ليصبح مرتبطاً بعدد التذاكر الفعلي من الموقع لو متاح
-                tickets_available = 0 
+                # استخراج جزء من النص المتعلق بالمواعيد لحساب بصمة له
+                # البصمة (Hash) دي بتمثل شكل الصفحة الحالي بالحفلات الحالية
+                current_hash = hashlib.md5(page_content.encode('utf-8')).hexdigest()
                 
-                if "vox cinemas" in page_content and ("dune" in page_content or "avengers" in page_content):
-                    # هنا جعلناه يفحص لو التذاكر متاحة فعلاً (أكبر من صفر) قبل إرسال التنبيه
-                    # إذا كنت تريد اعتبار ظهور المؤشرات كدليل كافٍ، يمكنك جعل tickets_available = 1 افتراضياً هنا
-                    tickets_available = 1  # افتراض مؤقت لحين ربطه بقراءة العدد بدقة من الموقع
+                # ملف محلي لتخزين آخر بصمة تم رصدها لكل فيلم عشان يقارن بيها
+                hash_file = f"hash_{movie_name.replace(' ', '_')}.txt"
                 
-                # الشرط الجديد: لن يتم إرسال أي إشعار إلا إذا كانت التذاكر متاحة وحقيقية
-                if tickets_available > 0:
+                previous_hash = ""
+                if os.path.exists(hash_file):
+                    with open(hash_file, "r") as f:
+                        previous_hash = f.read().strip()
+                
+                # لو دي أول مرة يشتغل أو مفيش ملف سابق، نحفظ البصمة الحالية بس من غير تنبيه
+                if not previous_hash:
+                    with open(hash_file, "w") as f:
+                        f.write(current_hash)
+                    print(f"📌 تم حفظ الحالة الحالية لفيلم {movie_name} كمرجع، بانتظار أي تغيير جديد.")
+                    continue
+                
+                # الشرط السحري: لو البصمة اتغيرت (يعني الموقع حدث جدوله ونزل الأسبوع التاني)
+                if current_hash != previous_hash:
                     alert_msg = (
-                        f"🚨 **تنبيه حجز متاح الآن!** 🚨\n\n"
+                        f"🚨 **تنبيه عاجل: تم رصد جدول / تذاكر جديدة!** 🚨\n\n"
                         f"🎬 الفيلم: **{movie_name}**\n"
                         f"🎦 الصالة المستهدفة: **{hall_type}**\n\n"
-                        f"✨ تم رصد المؤشرات على السيستم بنجاح!\n"
-                        f"🔗 [اضغط هنا لفتح صفحة الحجز مباشرة]({direct_link})"
+                        f"✨ موقع السينما قام بتحديث مواعيد الحفلات (احتمال نزول تذاكر الأسبوع الجديد)!\n"
+                        f"🔗 [اضغط هنا لفتح الحجز فوراً]({direct_link})"
                     )
                     send_telegram_message(session, alert_msg)
-                    time.sleep(1)
-                    print(f"✅ تم رصد تطابق لـ {movie_name} وإرسال التنبيه.")
-                else:
-                    print(f"⏳ فيلم '{movie_name}' صالة '{hall_type}' غير متاح للحجز حالياً، البوت صامت في الخلفية.")
                     
-            except requests.exceptions.RequestException as e:
-                print(f"❌ خطأ في الاتصال أثناء الفحص للفيلم {movie_name}: {e}")
+                    # نحدث البصمة المخزنة عشان ميبعتش تاني لنفس التحديث
+                    with open(hash_file, "w") as f:
+                        f.write(current_hash)
+                        
+                    print(f"✅ تم اكتشاف تغيير في جدول {movie_name} وإرسال التنبيه وتحديث البصمة.")
+                else:
+                    print(f"⏳ لا يوجد أي تغيير في مواعيد فيلم '{movie_name}' حتى الآن، البوت صامت.")
+                    
             except Exception as e:
-                print(f"❌ خطأ غير متوقع للفيلم {movie_name}: {e}")
+                print(f"❌ خطأ أثناء الفحص للفيلم {movie_name}: {e}")
             
             time.sleep(2)
 
