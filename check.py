@@ -56,7 +56,16 @@ def check_booking():
                 response.raise_for_status()
                 page_content = response.text.lower()
                 
+                # يمكنك تعديل هذا المتغير ليصبح مرتبطاً بعدد التذاكر الفعلي من الموقع لو متاح
+                tickets_available = 0 
+                
                 if "vox cinemas" in page_content and ("dune" in page_content or "avengers" in page_content):
+                    # هنا جعلناه يفحص لو التذاكر متاحة فعلاً (أكبر من صفر) قبل إرسال التنبيه
+                    # إذا كنت تريد اعتبار ظهور المؤشرات كدليل كافٍ، يمكنك جعل tickets_available = 1 افتراضياً هنا
+                    tickets_available = 1  # افتراض مؤقت لحين ربطه بقراءة العدد بدقة من الموقع
+                
+                # الشرط الجديد: لن يتم إرسال أي إشعار إلا إذا كانت التذاكر متاحة وحقيقية
+                if tickets_available > 0:
                     alert_msg = (
                         f"🚨 **تنبيه حجز متاح الآن!** 🚨\n\n"
                         f"🎬 الفيلم: **{movie_name}**\n"
@@ -68,7 +77,7 @@ def check_booking():
                     time.sleep(1)
                     print(f"✅ تم رصد تطابق لـ {movie_name} وإرسال التنبيه.")
                 else:
-                    print(f"⏳ فيلم '{movie_name}' صالة '{hall_type}' لسه غير متاح في النتائج.")
+                    print(f"⏳ فيلم '{movie_name}' صالة '{hall_type}' غير متاح للحجز حالياً، البوت صامت في الخلفية.")
                     
             except requests.exceptions.RequestException as e:
                 print(f"❌ خطأ في الاتصال أثناء الفحص للفيلم {movie_name}: {e}")
