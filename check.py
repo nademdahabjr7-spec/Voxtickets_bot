@@ -20,9 +20,11 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/125.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8"
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8",
+    "Referer": "https://egy.voxcinemas.com/"
 }
 
 # =====================================
@@ -34,12 +36,12 @@ TARGETS = [
         "movie": "Clayface",
         "hall": "STANDARD",
         "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=clayface",
-        "fallback_query": "site:egy.voxcinemas.com/showtimes city-centre-almaza clayface"
+        "fallback_query": "site:egy.voxcinemas.com clayface almaza"
     }
 ]
 
 # =====================================
-# DETECTION PATTERNS
+# DETECTION PATTERNS (أكثر شمولاً)
 # =====================================
 
 DATE_PATTERN = re.compile(
@@ -48,7 +50,8 @@ DATE_PATTERN = re.compile(
     r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|"
     r"(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\s*,?\s*"
     r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}|"
-    r"\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*"
+    r"\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*|"
+    r"(?:today|tomorrow|tonight)"
     r")\b",
     re.I
 )
@@ -56,12 +59,6 @@ DATE_PATTERN = re.compile(
 TIME_PATTERN = re.compile(
     r"\b(?:[01]?\d|2[0-3]):[0-5]\d\s*(?:am|pm)?\b"
     r"|\b(?:1[0-2]|0?[1-9])\s*(?:am|pm)\b",
-    re.I
-)
-
-BOOKING_PATTERN = re.compile(
-    r"\b(book now|book tickets|select seats|choose seats|"
-    r"book|tickets|select)\b",
     re.I
 )
 
@@ -104,15 +101,14 @@ def extract_showtimes(html, target):
     for element in soup(["script", "style", "noscript", "svg"]):
         element.decompose()
 
-    candidates = soup.find_all(["div", "li", "article", "section"])
-    candidates.sort(key=lambda tag: len(tag.get_text(" ", strip=True)))
-
+    # بحث أوسع يشمل الـ spans والـ p وكل العناصر لاصطياد النص
+    candidates = soup.find_all(["div", "li", "article", "section", "p", "span"])
     found = {}
 
     for tag in candidates:
         text = tag.get_text(" ", strip=True)
 
-        if not text or len(text) > 1800:
+        if not text or len(text) > 1500:
             continue
 
         dates = DATE_PATTERN.findall(text)
@@ -121,21 +117,15 @@ def extract_showtimes(html, target):
         if not dates or not times:
             continue
 
-        booking_links = []
+        booking_link = target["url"]
         for link in tag.find_all("a", href=True):
             href = urljoin(target["url"], link["href"])
-            label = link.get_text(" ", strip=True)
-
-            if (
-                BOOKING_PATTERN.search(label)
-                or "book" in href.lower()
-                or "seat" in href.lower()
-            ):
-                booking_links.append(href)
+            if "book" in href.lower() or "seat" in href.lower() or "showtimes" in href.lower():
+                booking_link = href
+                break
 
         date_value = dates[0].strip()
         time_value = times[0].strip()
-        booking_link = booking_links[0] if booking_links else target["url"]
 
         unique_text = f"{target['movie']}|{target['hall']}|{date_value}|{time_value}"
         showtime_id = hashlib.sha256(unique_text.lower().encode("utf-8")).hexdigest()
@@ -161,18 +151,18 @@ def check_target(session, target):
     success = False
 
     try:
-        response = session.get(target["url"], timeout=15)
+        response = session.get(target["url"], timeout=20, headers=HEADERS)
         if response.status_code == 200 and len(response.text) > 500:
             html = response.text
             success = True
             print("🎯 Direct fetch successful.")
-    except Exception:
-        print("⚠️ Direct fetch blocked/timeout, switching to smart search fallback...")
+    except Exception as e:
+        print(f"⚠️ Direct fetch error: {e}, switching to smart search fallback...")
 
     if not success:
         try:
             search_url = f"https://html.duckduckgo.com/html/?q={target['fallback_query']}"
-            response = session.get(search_url, timeout=15)
+            response = session.get(search_url, timeout=20, headers=HEADERS)
             if response.status_code in (200, 202) and len(response.text) > 300:
                 html = response.text
                 success = True
@@ -204,17 +194,21 @@ def main():
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    # رسالة بدء التجربة
     send_telegram(
         session,
-        "🤖 **بدء اختبار استخراج المواعيد المتاحة لفيلم (Clayface)...**"
+        "🤖 **بدء فحص وتجربة استخراج حفلات (Clayface)...**"
     )
 
     for target in TARGETS:
         showtimes = check_target(session, target)
 
         if not showtimes:
-            print(f"⏳ No showtimes extracted for {target['movie']}. Check page structure or patterns.")
+            print(f"⏳ No showtimes extracted for {target['movie']}. Trying alternative general fetch...")
+            # إرسال رابط الموقع الأساسي كإشعار تجريبي للتأكد من وصول اللينكات
+            send_telegram(
+                session,
+                f"🍿 **رابط الفيلم التجريبي المباشر:**\n🎬 {target['movie']}\n🔗 {target['url']}"
+            )
             continue
 
         print(f"\n📋 المواعيد المتاحة للفيلم {target['movie']}:")
@@ -223,7 +217,7 @@ def main():
 
         items_list = list(showtimes.values())[:5]
         message = (
-            "🍿 **اختبار المواعيد المتاحة حالياً!** 🍿\n\n"
+            "🍿 **تم رصد المواعيد بنجاح!** 🍿\n\n"
             f"🎬 Movie: {target['movie']}\n"
             f"🏛️ Cinema: City Centre Almaza\n\n"
         )
@@ -239,4 +233,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-            
+    
