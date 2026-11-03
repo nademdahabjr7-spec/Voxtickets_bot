@@ -25,13 +25,27 @@ TARGETS = [
 ]
 
 
-def send_telegram_message(message):
+def send_telegram_with_button(message, url_link):
   url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-  payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
+
+  # إضافة زر تفاعلي ينقلك فوراً للحجز على الموبايل
+  reply_markup = {
+      "inline_keyboard": [[
+          {"text": "🎟️ فتح الجدول واختيار المعاد للحجز", "url": url_link}
+      ]]
+  }
+
+  payload = {
+      "chat_id": CHAT_ID,
+      "text": message,
+      "parse_mode": "Markdown",
+      "reply_markup": reply_markup,
+  }
+
   try:
     response = requests.post(url, json=payload, timeout=20)
     response.raise_for_status()
-    print("✅ تم إرسال التنبيه إلى تليجرام بنجاح!")
+    print("✅ تم إرسال التنبيه التفاعلي إلى تليجرام بنجاح!")
   except Exception as e:
     print(f"❌ خطأ في إرسال رسالة تليجرام: {e}")
 
@@ -57,26 +71,26 @@ def check_booking():
       response.raise_for_status()
       page_content = response.text.lower()
 
-      # شرط أدق: التأكد من وجود مؤشرات حقيقية لحجز مواعيد صادر من فوكس
       if "vox cinemas" in page_content and (
           "showtimes" in page_content
           or "book" in page_content
           or "tickets" in page_content
       ):
         alert_msg = (
-            f"🚨 **مواعيد الحجز متاحة رسمياً!** 🚨\n\n"
+            f"🚨 **مواعيد الحجز نزلت على السيستم!** 🚨\n\n"
             f"🎬 الفيلم: **{movie_name}**\n"
-            f"🎦 الصالة المستهدفة: **{hall_type}**\n\n"
-            f"✨ السيستم رصد إشارات حقيقية لنزول المواعيد!\n"
-            f"🔗 [اضغط هنا لفتح صفحة الحجز مباشرة]({direct_link})"
+            f"🎦 الصالة: **{hall_type}**\n"
+            f"📍 السينما: **سيتي سنتر ألماظة**\n\n"
+            f"👇 اضغط على الزر بالأسفل لفتح الجدول واختيار الموعد المناسب"
+            f" للحجز مباشرة:"
         )
-        send_telegram_message(alert_msg)
+        send_telegram_with_button(alert_msg, direct_link)
         time.sleep(2)
-        print(f"✅ تم رصد جدول حقيقي لـ {movie_name} وإرسال التنبيه.")
+        print(f"✅ تم رصد جدول لـ {movie_name} وإرسال الزر التفاعلي.")
       else:
         print(
-            f"⏳ نتائج البحث موجودة لـ '{movie_name}' ولكن لا توجد مواعيد حجز"
-            " معلنة بعد."
+            f"⏳ فيلم '{movie_name}' صالة '{hall_type}' لسه مفيش مواعيد نزلت"
+            " ليه."
         )
 
     except Exception as e:
