@@ -21,7 +21,9 @@ def send_telegram_message(message):
 
 
 def check_booking():
-  query = "site:egy.voxcinemas.com Dune 3 OR Avengers Doomsday"
+  query = (
+      "site:egy.voxcinemas.com Dune 3 OR Avengers Doomsday infinity vision"
+  )
   search_url = f"https://html.duckduckgo.com/html/?q={query}"
 
   headers = {
@@ -58,4 +60,4 @@ def check_booking():
 
 if __name__ == "__main__":
   check_booking()
-    
+  
