@@ -2,8 +2,8 @@ name: Check Vox Cinema Showtimes
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # فحص كل 15 دقيقة لحماية السكربت من الحظر
-  workflow_dispatch:        # يسمح بالتشغيل اليدوي في أي وقت
+    - cron: '*/15 * * * *'  # فحص تلقائي كل 15 دقيقة
+  workflow_dispatch:        # السماح بالتشغيل اليدوي أيضاً عند الحاجة
 
 jobs:
   check-showtimes:
