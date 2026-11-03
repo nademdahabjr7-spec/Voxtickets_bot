@@ -26,21 +26,15 @@ HEADERS = {
 }
 
 # =====================================
-# MOVIES TO MONITOR
+# MOVIES TO MONITOR (تجربة حية على فيلم Clayface)
 # =====================================
 
 TARGETS = [
     {
-        "movie": "Dune: Part Three",
-        "hall": "IMAX",
-        "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=dune-part-three",
-        "fallback_query": "site:egy.voxcinemas.com dune almaza imax"
-    },
-    {
-        "movie": "Avengers: Doomsday",
-        "hall": "MAX",
-        "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=avengers-doomsday-infinity-vision",
-        "fallback_query": "site:egy.voxcinemas.com avengers almaza max"
+        "movie": "Clayface",
+        "hall": "STANDARD", # صالة افتراضية للاختبار الحي
+        "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=clayface",
+        "fallback_query": "site:egy.voxcinemas.com/showtimes city-centre-almaza clayface"
     }
 ]
 
@@ -130,9 +124,8 @@ def send_telegram(session, message):
 # =====================================
 
 def hall_matches(text, hall):
-    if hall == "IMAX":
-        return bool(re.search(r"\bIMAX\b", text, re.I))
-    return bool(re.search(r"\bMAX\b", text, re.I))
+    # قبول عام لأي صالة في حالة التجربة الحية للتأكد من التقاط الحفلات
+    return True
 
 
 # =====================================
@@ -154,9 +147,6 @@ def extract_showtimes(html, target):
         text = tag.get_text(" ", strip=True)
 
         if not text or len(text) > 1800:
-            continue
-
-        if not hall_matches(text, target["hall"]):
             continue
 
         dates = DATE_PATTERN.findall(text)
@@ -220,7 +210,6 @@ def check_target(session, target):
         try:
             search_url = f"https://html.duckduckgo.com/html/?q={target['fallback_query']}"
             response = session.get(search_url, timeout=15)
-            # السماح بكود 202 في استجابة البحث لتجنب انهيار الفحص
             if response.status_code in (200, 202) and len(response.text) > 300:
                 html = response.text
                 success = True
@@ -257,7 +246,7 @@ def main():
     send_telegram(
         session,
         "🤖 **تم تشغيل نظام مراقبة فوكس سينما بنجاح!**\n\n"
-        "✨ البوت يعمل الآن في الخلفية وجاهز لإرسال التنبيهات فور نزول الحفلات."
+        "✨ جاري اختبار الفيلم الحالي (Clayface)..."
     )
 
     for target in TARGETS:
@@ -304,4 +293,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
