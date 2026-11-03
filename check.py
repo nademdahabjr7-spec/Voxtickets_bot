@@ -207,7 +207,6 @@ def check_target(session, target):
     html = ""
     success = False
 
-    # 1. محاولة الفحص المباشر أولاً
     try:
         response = session.get(target["url"], timeout=15)
         if response.status_code == 200 and len(response.text) > 500:
@@ -217,7 +216,6 @@ def check_target(session, target):
     except Exception:
         print("⚠️ Direct fetch blocked/timeout, switching to smart search fallback...")
 
-    # 2. لو الفحص المباشر فشل (بسبب حماية فوكس)، نستخدم محرك البحث الذكي كبديل آمن
     if not success:
         try:
             search_url = f"https://html.duckduckgo.com/html/?q={target['fallback_query']}"
@@ -252,6 +250,13 @@ def main():
     session = requests.Session()
     session.headers.update(HEADERS)
 
+    # 🚀 رسالة اختبارية لتأكيد عمل البوت وتوصيل الإشعارات فوراً عند بدء التشغيل
+    send_telegram(
+        session,
+        "🤖 **تم تشغيل نظام مراقبة فوكس سينما بنجاح!**\n\n"
+        "✨ البوت يعمل الآن في الخلفية وجاهز لإرسال التنبيهات فور نزول الحفلات."
+    )
+
     for target in TARGETS:
         showtimes = check_target(session, target)
 
@@ -269,12 +274,12 @@ def main():
             item = showtimes[showtime_id]
 
             message = (
-                "🚨 NEW VOX SHOWTIME DETECTED!\n\n"
+                "🚨 **NEW VOX SHOWTIME DETECTED!** 🚨\n\n"
                 f"🎬 Movie: {item['movie']}\n"
                 f"🎦 Hall: {item['hall']}\n"
                 f"📅 Date: {item['date']}\n"
                 f"🕒 Time: {item['time']}\n\n"
-                "🎟️ Booking link:\n"
+                "🎟️ **Booking link:**\n"
                 f"{item['link']}"
             )
 
@@ -296,3 +301,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
