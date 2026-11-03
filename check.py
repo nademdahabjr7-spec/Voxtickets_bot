@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Vox Cinemas showtime monitor - City Centre Almaza.
+Optimized for continuous background execution (Cron Job / GitHub Actions).
 """
 
 import argparse
@@ -113,7 +114,8 @@ def fetch(session, url, params=None):
     for attempt in range(RETRIES + 1):
         try:
             response = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
-            if response.status_code in (200, 202) and len(response.text) > 300:
+            # الاعتماد على 200 للتأكد من نظافة الصفحة وعدم قبول ردود الحماية الوهمية
+            if response.status_code == 200 and len(response.text) > 500:
                 return response.text
             last_error = f"HTTP {response.status_code}, {len(response.text)} chars"
         except requests.RequestException as error:
@@ -127,7 +129,12 @@ def fetch(session, url, params=None):
 
 def send_telegram(session, message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message, "disable_web_page_preview": True}
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown",
+        "disable_web_page_preview": True
+    }
 
     for _ in range(3):
         try:
@@ -333,13 +340,16 @@ def check_target(session, target, debug=False):
 
 
 def build_message(movie, hall, items):
-    title = "🚨 NEW VOX SHOWTIMES DETECTED!" if len(items) > 1 else "🚨 NEW VOX SHOWTIME DETECTED!"
+    title = "🚨 *NEW VOX SHOWTIMES DETECTED!*" if len(items) > 1 else "🚨 *NEW VOX SHOWTIME DETECTED!*"
 
-    lines = [title, "", f"🎬 Movie: {movie}", f"🎦 Hall: {hall}", f"🏛️ Cinema: {CINEMA_NAME}", ""]
+    lines = [title, "", f"🎬 *Movie:* {movie}", f"🎦 *Hall:* {hall}", f"🏛️ *Cinema:* {CINEMA_NAME}", ""]
     lines += [f"📅 {item['date']} at 🕒 {item['time']}" for item in items]
 
     links = sorted({item["link"] for item in items})
-    lines += ["", "🎟️ Booking:"] + links
+    lines += ["", "🎟️ *Booking:*"] + links
+
+    if any(item["source"] != "Vox page" for item in items):
+        lines += ["", "⚠️ _Note: Detected via search fallback. Confirm on Vox site before booking._"]
 
     return "\n".join(lines)
 
@@ -406,19 +416,14 @@ def main():
     session = requests.Session()
     session.headers.update(HEADERS)
 
+    # اختبار التيليجرام يدويًا فقط لو طلبنا الأرجيومنت ده
     if args.test_telegram:
         ok = send_telegram(
             session,
-            f"Test from the Vox monitor at {datetime.now():%Y-%m-%d %H:%M}. Telegram is connected.",
+            f"🧪 *Test from Vox monitor at* `{datetime.now():%Y-%m-%d %H:%M}`. Telegram is connected.",
         )
         log.info("Test message %s.", "sent" if ok else "FAILED")
         sys.exit(0 if ok else 1)
-
-    # 🚀 رسالة تأكيد فورية أول ما الـ Workflow يبدأ عشان تطمن إن البوت شغال
-    send_telegram(
-        session,
-        "🤖 **تم تشغيل نظام مراقبة فوكس سينما بنجاح!**\n✨ البوت يعمل الآن وجاهز لإرسال الحفلات."
-    )
 
     state = load_state()
 
