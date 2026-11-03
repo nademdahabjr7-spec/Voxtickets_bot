@@ -1,9 +1,7 @@
 name: Check Vox Cinema Showtimes
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'  # فحص تلقائي كل 15 دقيقة
-  workflow_dispatch:        # السماح بالتشغيل اليدوي أيضاً عند الحاجة
+  workflow_dispatch:
 
 jobs:
   check-showtimes:
@@ -11,10 +9,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
