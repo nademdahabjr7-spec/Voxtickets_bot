@@ -6,7 +6,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
 # رابط صفحة السينما (ممكن تخليه لرابط فرع معين زي ألماظة لو حابب)
-TARGET_URL = "https://egy..voxcinemas.com/showtimes?city-centre-almaza"
+TARGET_URL = "https://egy.voxcinemas.com/showtimes?city-centre-almaza"
 
 MOVIES_TO_CHECK = ["Dune 3", "Avengers: Doomsday"]
 
