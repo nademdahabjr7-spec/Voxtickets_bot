@@ -1,4 +1,3 @@
-
 import os
 import re
 import json
@@ -34,12 +33,14 @@ TARGETS = [
     {
         "movie": "Dune: Part Three",
         "hall": "IMAX",
-        "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=dune-part-three"
+        "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=dune-part-three",
+        "fallback_query": "site:egy.voxcinemas.com/showtimes city-centre-almaza dune imax schedule"
     },
     {
         "movie": "Avengers: Doomsday",
         "hall": "MAX",
-        "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=avengers-doomsday-infinity-vision"
+        "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=avengers-doomsday-infinity-vision",
+        "fallback_query": "site:egy.voxcinemas.com/showtimes city-centre-almaza avengers max schedule"
     }
 ]
 
@@ -100,11 +101,7 @@ def save_state(state):
 # =====================================
 
 def send_telegram(session, message):
-
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{TELEGRAM_TOKEN}/sendMessage"
-    )
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
     payload = {
         "chat_id": CHAT_ID,
@@ -113,12 +110,7 @@ def send_telegram(session, message):
     }
 
     try:
-        response = session.post(
-            url,
-            json=payload,
-            timeout=20
-        )
-
+        response = session.post(url, json=payload, timeout=20)
         response.raise_for_status()
 
         if response.json().get("ok"):
@@ -138,10 +130,8 @@ def send_telegram(session, message):
 # =====================================
 
 def hall_matches(text, hall):
-
     if hall == "IMAX":
         return bool(re.search(r"\bIMAX\b", text, re.I))
-
     return bool(re.search(r"\bMAX\b", text, re.I))
 
 
@@ -150,26 +140,17 @@ def hall_matches(text, hall):
 # =====================================
 
 def extract_showtimes(html, target):
-
     soup = BeautifulSoup(html, "html.parser")
 
-    for element in soup(
-        ["script", "style", "noscript", "svg"]
-    ):
+    for element in soup(["script", "style", "noscript", "svg"]):
         element.decompose()
 
-    candidates = soup.find_all(
-        ["div", "li", "article", "section"]
-    )
-
-    candidates.sort(
-        key=lambda tag: len(tag.get_text(" ", strip=True))
-    )
+    candidates = soup.find_all(["div", "li", "article", "section"])
+    candidates.sort(key=lambda tag: len(tag.get_text(" ", strip=True)))
 
     found = {}
 
     for tag in candidates:
-
         text = tag.get_text(" ", strip=True)
 
         if not text or len(text) > 1800:
@@ -185,14 +166,8 @@ def extract_showtimes(html, target):
             continue
 
         booking_links = []
-
         for link in tag.find_all("a", href=True):
-
-            href = urljoin(
-                target["url"],
-                link["href"]
-            )
-
+            href = urljoin(target["url"], link["href"])
             label = link.get_text(" ", strip=True)
 
             if (
@@ -207,23 +182,10 @@ def extract_showtimes(html, target):
 
         date_value = dates[0].strip()
         time_value = times[0].strip()
+        booking_link = booking_links[0] if booking_links else target["url"]
 
-        booking_link = (
-            booking_links[0]
-            if booking_links
-            else target["url"]
-        )
-
-        unique_text = (
-            target["movie"] + "|" +
-            target["hall"] + "|" +
-            date_value + "|" +
-            time_value
-        )
-
-        showtime_id = hashlib.sha256(
-            unique_text.lower().encode("utf-8")
-        ).hexdigest()
+        unique_text = f"{target['movie']}|{target['hall']}|{date_value}|{time_value}"
+        showtime_id = hashlib.sha256(unique_text.lower().encode("utf-8")).hexdigest()
 
         found[showtime_id] = {
             "movie": target["movie"],
@@ -237,60 +199,44 @@ def extract_showtimes(html, target):
 
 
 # =====================================
-# CHECK VOX CINEMAS
+# CHECK TARGET (WITH FALLBACK)
 # =====================================
 
 def check_target(session, target):
+    print(f"\n⏳ Checking {target['movie']} ({target['hall']})...")
+    html = ""
+    success = False
 
-    print(
-        f"\n⏳ Checking {target['movie']} "
-        f"({target['hall']})..."
-    )
-
+    # 1. محاولة الفحص المباشر أولاً
     try:
+        response = session.get(target["url"], timeout=15)
+        if response.status_code == 200 and len(response.text) > 500:
+            html = response.text
+            success = True
+            print("🎯 Direct fetch successful.")
+    except Exception:
+        print("⚠️ Direct fetch blocked/timeout, switching to smart search fallback...")
 
-        response = session.get(
-            target["url"],
-            timeout=25
-        )
-
-        response.raise_for_status()
-
-        html = response.text
-
-        if len(html) < 500:
-            print("⚠️ Invalid or incomplete page.")
+    # 2. لو الفحص المباشر فشل (بسبب حماية فوكس)، نستخدم محرك البحث الذكي كبديل آمن
+    if not success:
+        try:
+            search_url = f"https://html.duckduckgo.com/html/?q={target['fallback_query']}"
+            response = session.get(search_url, timeout=15)
+            response.raise_for_status()
+            html = response.text
+            success = True
+            print("🔍 Fallback search fetch successful.")
+        except requests.RequestException as error:
+            print(f"❌ Connection error on fallback: {error}")
             return None
 
-        blocked_markers = [
-            "access denied",
-            "errors.edgesuite.net",
-            "akamai reference"
-        ]
-
-        if any(
-            marker in html.lower()
-            for marker in blocked_markers
-        ):
-            print("⚠️ VOX access denied.")
-            return None
-
-        showtimes = extract_showtimes(
-            html,
-            target
-        )
-
-        print(
-            f"🎯 Found {len(showtimes)} "
-            f"potential showtimes."
-        )
-
-        return showtimes
-
-    except requests.RequestException as error:
-
-        print(f"❌ VOX connection error: {error}")
+    if not success or len(html) < 200:
+        print("⚠️ Invalid or empty page content.")
         return None
+
+    showtimes = extract_showtimes(html, target)
+    print(f"🎯 Found {len(showtimes)} potential showtimes.")
+    return showtimes
 
 
 # =====================================
@@ -298,40 +244,28 @@ def check_target(session, target):
 # =====================================
 
 def main():
-
     if not TELEGRAM_TOKEN or not CHAT_ID:
         print("❌ Missing Telegram credentials.")
         return
 
     state = load_state()
-
     session = requests.Session()
     session.headers.update(HEADERS)
 
     for target in TARGETS:
-
-        showtimes = check_target(
-            session,
-            target
-        )
+        showtimes = check_target(session, target)
 
         if showtimes is None:
             continue
 
         movie_key = target["movie"]
-
         if movie_key not in state:
             state[movie_key] = {}
 
         previous = state[movie_key]
-
-        new_ids = (
-            set(showtimes.keys())
-            - set(previous.keys())
-        )
+        new_ids = set(showtimes.keys()) - set(previous.keys())
 
         for showtime_id in new_ids:
-
             item = showtimes[showtime_id]
 
             message = (
@@ -345,31 +279,20 @@ def main():
             )
 
             if send_telegram(session, message):
-
                 state[movie_key][showtime_id] = item
-
                 save_state(state)
 
             time.sleep(2)
 
         if not new_ids:
-            print(
-                f"⏳ No new showtimes for {movie_key}."
-            )
+            print(f"⏳ No new showtimes for {movie_key}.")
 
         time.sleep(3)
 
     save_state(state)
-
     session.close()
-
     print("\n✅ Monitoring completed.")
 
 
-# =====================================
-# START
-# =====================================
-
 if __name__ == "__main__":
     main()
-    
