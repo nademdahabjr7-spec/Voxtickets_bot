@@ -9,7 +9,7 @@ CHAT_ID = os.environ.get("CHAT_ID")
 TARGET_URL = "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza"
 
 # حط هنا قائمة الأفلام اللي عاوز تتابعها (زود براحتك)
-MOVIES_TO_CHECK = ["Dune 3", "Avengers: Doomsday","]
+MOVIES_TO_CHECK = ["Dune 3", "Avengers: Doomsday"]
 
 
 def send_telegram_message(message):
