@@ -35,7 +35,7 @@ def check_booking():
     
     try:
         print("⏳ جاري فحص صفحة فوكس سينما مصر للبحث عن المواعيد...")
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
         page_content = response.text.lower()
         
