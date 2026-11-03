@@ -57,22 +57,26 @@ def check_booking():
       response.raise_for_status()
       page_content = response.text.lower()
 
+      # شرط أدق: التأكد من وجود مؤشرات حقيقية لحجز مواعيد صادر من فوكس
       if "vox cinemas" in page_content and (
-          "dune" in page_content or "avengers" in page_content
+          "showtimes" in page_content
+          or "book" in page_content
+          or "tickets" in page_content
       ):
         alert_msg = (
-            f"🚨 **تنبيه حجز متاح الآن!** 🚨\n\n"
+            f"🚨 **مواعيد الحجز متاحة رسمياً!** 🚨\n\n"
             f"🎬 الفيلم: **{movie_name}**\n"
             f"🎦 الصالة المستهدفة: **{hall_type}**\n\n"
-            f"✨ تم رصد المؤشرات على السيستم بنجاح!\n"
+            f"✨ السيستم رصد إشارات حقيقية لنزول المواعيد!\n"
             f"🔗 [اضغط هنا لفتح صفحة الحجز مباشرة]({direct_link})"
         )
         send_telegram_message(alert_msg)
         time.sleep(2)
-        print(f"✅ تم رصد تطابق لـ {movie_name} وإرسال التنبيه.")
+        print(f"✅ تم رصد جدول حقيقي لـ {movie_name} وإرسال التنبيه.")
       else:
         print(
-            f"⏳ فيلم '{movie_name}' صالة '{hall_type}' لسه غير متاح في النتائج."
+            f"⏳ نتائج البحث موجودة لـ '{movie_name}' ولكن لا توجد مواعيد حجز"
+            " معلنة بعد."
         )
 
     except Exception as e:
