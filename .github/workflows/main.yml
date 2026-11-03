@@ -2,9 +2,8 @@ name: Booking Checker
 
 on:
   schedule:
-    # بيشتغل تلقائياً كل 5 دقائق
     - cron: '*/5 * * * *'
-  workflow_dispatch: # زرار للتشغيل اليدوي للتجربة
+  workflow_dispatch:
 
 jobs:
   check:
