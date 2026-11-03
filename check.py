@@ -1,93 +1,59 @@
-import json
 import os
-import sys
-from urllib.parse import urljoin
-
 import requests
-from bs4 import BeautifulSoup
 
-# ===== الإعدادات =====
-URL = "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza"  # رابط صفحة السينما
-MOVIE_LINK_SELECTOR = 'a[href*="/movie-details/"]'  # طريقة الوصول لروابط الأفلام في الموقع
-WATCHED_MOVIES = [
-    "Avengers Doomsday",
-    "Dune part three",
-]
-TOKEN = os.environ["TOKEN"]
-CHAT_ID = os.environ["CHAT_ID"]
-FILE = "seen.json"
+# جلب البيانات الحساسة من إعدادات GitHub Secrets
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
+
+# رابط صفحة السينما
+TARGET_URL = "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza"
+
+# حط هنا قائمة الأفلام اللي عاوز تتابعها (زود براحتك)
+MOVIES_TO_CHECK = ["Dune 3", "Avengers: Doomsday","]
 
 
-def normalize(text):
-    """توحيد شكل الكتابة عشان المقارنة تبقى أدق"""
-    text = text.strip().lower()
-    for old, new in [("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ى", "ي"), ("ة", "ه")]:
-        text = text.replace(old, new)
-    return text
-
-
-def is_watched(name):
-    n = normalize(name)
-    return any(normalize(w) in n for w in WATCHED_MOVIES)
-
-
-def load_seen():
-    if os.path.exists(FILE):
-        with open(FILE, encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-def save_seen(seen):
-    with open(FILE, "w", encoding="utf-8") as f:
-        json.dump(seen, f, ensure_ascii=False, indent=2)
-
-
-def get_watched_movies():
-    html = requests.get(URL, timeout=20, headers={"User-Agent": "Mozilla/5.0"}).text
-    soup = BeautifulSoup(html, "html.parser")
-
-    movies = {}
-    for a in soup.select(MOVIE_LINK_SELECTOR):
-        name = (a.get("title") or a.get_text(strip=True) or "").strip()
-        if name and is_watched(name):
-            movies[urljoin(URL, a["href"])] = name
-    return movies
-
-
-def send_telegram(text):
-    r = requests.post(
-        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        json={"chat_id": CHAT_ID, "text": text},
-        timeout=20,
-    )
-    r.raise_for_status()
-
-
-def main():
+def send_telegram_message(message):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        movies = get_watched_movies()
-    except requests.RequestException as e:
-        print("فشل تحميل الصفحة:", e)
-        sys.exit(1)
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        print("✅ تم إرسال التنبيه إلى تليجرام بنجاح!")
+    except Exception as e:
+        print(f"❌ خطأ في إرسال رسالة تليجرام: {e}")
 
-    print("لقيت", len(movies), "من الأفلام اللي بتتابعها")
 
-    seen = load_seen()
-    new_movies = {url: name for url, name in movies.items() if url not in seen}
+def check_booking():
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
 
-    if new_movies:
-        lines = ["🎬 فيلم من اللي بتتابعه بقى متاح:", ""]
-        for url, name in new_movies.items():
-            lines.append(f"• {name}\n{url}")
-        send_telegram("\n".join(lines))
-        print("اتبعت", len(new_movies), "إشعار")
-    else:
-        print("مفيش جديد")
+    try:
+        response = requests.get(TARGET_URL, headers=headers, timeout=15)
+        response.raise_for_status()
+        html_content = response.text
 
-    seen.update(new_movies)
-    save_seen(seen)
+        # لف على كل فيلم في القائمة وشيك عليه لوحده
+        for movie_name in MOVIES_TO_CHECK:
+            if movie_name.lower() in html_content.lower():
+                alert_msg = (
+                    f"🚨 **الحجز فتح يا معلم!** 🚨\n\n"
+                    f"فيلم **{movie_name}** متاح دلوقتي للبيع/الحجز.\n\n"
+                    f"🔗 [اضغط هنا للحجز فوراً]({TARGET_URL})"
+                )
+                send_telegram_message(alert_msg)
+                print(f"✅ تم رصد الفيلم: {movie_name} وإرسال التنبيه.")
+            else:
+                print(f"⏳ فيلم '{movie_name}' لسه مفيش حجز ليه نازل...")
+
+    except Exception as e:
+        print(f"❌ خطأ أثناء فحص الموقع: {e}")
 
 
 if __name__ == "__main__":
-    main()
+    check_booking()
+    
