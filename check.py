@@ -13,7 +13,7 @@ TARGETS = [
         "direct_link": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=dune-part-three"
     },
     {
-        "movie": "Avengers Doomsday",
+        "movie": "Avengers Doomsday infinity vision",
         "hall": "MAX",
         "query": "site:egy.voxcinemas.com avengers max",
         "direct_link": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=avengers-doomsday-infinity-vision"
