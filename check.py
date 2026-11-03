@@ -1,4 +1,4 @@
-#!/usr/init/env python3
+#!/usr/bin/env python3
 """
 Vox Cinemas showtime monitor - City Centre Almaza.
 """
@@ -113,7 +113,6 @@ def fetch(session, url, params=None):
     for attempt in range(RETRIES + 1):
         try:
             response = session.get(url, params=params, timeout=REQUEST_TIMEOUT)
-            # تم تعديل القبول ليشمل حالة 202 الخاصة بالبحث البديل ومعالجة الـ HTML
             if response.status_code in (200, 202) and len(response.text) > 300:
                 return response.text
             last_error = f"HTTP {response.status_code}, {len(response.text)} chars"
@@ -261,3 +260,184 @@ def extract_showtimes(html, target, from_fallback=False):
         if from_fallback and keyword not in text.lower():
             continue
 
+        times = parse_block(text, target)
+        if not times:
+            continue
+
+        if from_fallback:
+            link = target["url"]
+        else:
+            link = find_booking_link(block, target["url"])
+            if link == target["url"] and not BOOKING_PATTERN.search(text):
+                continue
+
+        for date_value, time_value in times:
+            raw = f"{CINEMA_NAME}|{target['movie']}|{target['hall']}|{date_value}|{time_value}"
+            showtime_id = hashlib.sha256(raw.lower().encode("utf-8")).hexdigest()
+
+            found.setdefault(showtime_id, {
+                "movie": target["movie"],
+                "hall": target["hall"],
+                "cinema": CINEMA_NAME,
+                "date": date_value,
+                "time": time_value,
+                "link": link,
+                "source": "search fallback" if from_fallback else "Vox page",
+            })
+
+    return found
+
+
+# =====================================
+# CHECKING
+# =====================================
+
+def save_debug(name, html):
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = os.path.join(DEBUG_DIR, f"{name}_{stamp}.html")
+    with open(path, "w", encoding="utf-8") as file:
+        file.write(html)
+    log.info("Saved debug HTML to %s", path)
+
+
+def check_target(session, target, debug=False):
+    log.info("Checking %s (%s)...", target["movie"], target["hall"])
+    safe_name = re.sub(r"\W+", "_", target["movie"]).strip("_")
+
+    try:
+        html = fetch(session, target["url"])
+        if debug:
+            save_debug(f"{safe_name}_vox", html)
+
+        showtimes = extract_showtimes(html, target)
+        if showtimes:
+            log.info("Vox page: %d showtime(s).", len(showtimes))
+            return showtimes
+
+        log.info("Vox page loaded but no showtimes matched. Trying search fallback.")
+    except FetchError as error:
+        log.warning("Vox page failed (%s). Trying search fallback.", error)
+
+    try:
+        html = fetch(session, DDG_URL, params={"q": target["fallback_query"]})
+        if debug:
+            save_debug(f"{safe_name}_search", html)
+
+        showtimes = extract_showtimes(html, target, from_fallback=True)
+        log.info("Search fallback: %d showtime(s).", len(showtimes))
+        return showtimes
+    except FetchError as error:
+        log.error("Search fallback also failed (%s).", error)
+        return None
+
+
+def build_message(movie, hall, items):
+    title = "🚨 NEW VOX SHOWTIMES DETECTED!" if len(items) > 1 else "🚨 NEW VOX SHOWTIME DETECTED!"
+
+    lines = [title, "", f"🎬 Movie: {movie}", f"🎦 Hall: {hall}", f"🏛️ Cinema: {CINEMA_NAME}", ""]
+    lines += [f"📅 {item['date']} at 🕒 {item['time']}" for item in items]
+
+    links = sorted({item["link"] for item in items})
+    lines += ["", "🎟️ Booking:"] + links
+
+    return "\n".join(lines)
+
+
+def run_once(session, state, dry_run=False, debug=False):
+    for target in TARGETS:
+        try:
+            showtimes = check_target(session, target, debug)
+        except Exception:
+            log.exception("Error while checking %s", target["movie"])
+            continue
+
+        if showtimes is None:
+            continue
+
+        if dry_run:
+            log.info("[dry run] %s: %d showtime(s)", target["movie"], len(showtimes))
+            continue
+
+        notified = state["notified"]
+        new_items = {sid: item for sid, item in showtimes.items() if sid not in notified}
+        log.info("%s: %d showtime(s) found, %d new.", target["movie"], len(showtimes), len(new_items))
+
+        if new_items:
+            message = build_message(target["movie"], target["hall"], list(new_items.values()))
+
+            if send_telegram(session, message):
+                now = datetime.now().isoformat(timespec="minutes")
+                for sid, item in new_items.items():
+                    item["first_seen"] = now
+                    notified[sid] = item
+                save_state(state)
+            else:
+                log.error("Telegram send failed for %s.", target["movie"])
+
+        time.sleep(3)
+
+
+# =====================================
+# MAIN
+# =====================================
+
+def main():
+    parser = argparse.ArgumentParser(description="Vox City Centre Almaza showtime monitor.")
+    parser.add_argument("--interval", type=int, default=0, metavar="SECONDS")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--test-telegram", action="store_true")
+    parser.add_argument("--debug", action="store_true")
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[
+            logging.FileHandler(LOG_FILE, encoding="utf-8"),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+
+    if not args.dry_run and not (TELEGRAM_TOKEN and CHAT_ID):
+        log.error("Missing TELEGRAM_TOKEN or CHAT_ID environment variables.")
+        sys.exit(1)
+
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    if args.test_telegram:
+        ok = send_telegram(
+            session,
+            f"Test from the Vox monitor at {datetime.now():%Y-%m-%d %H:%M}. Telegram is connected.",
+        )
+        log.info("Test message %s.", "sent" if ok else "FAILED")
+        sys.exit(0 if ok else 1)
+
+    # 🚀 رسالة تأكيد فورية أول ما الـ Workflow يبدأ عشان تطمن إن البوت شغال
+    send_telegram(
+        session,
+        "🤖 **تم تشغيل نظام مراقبة فوكس سينما بنجاح!**\n✨ البوت يعمل الآن وجاهز لإرسال الحفلات."
+    )
+
+    state = load_state()
+
+    if args.interval <= 0:
+        run_once(session, state, args.dry_run, args.debug)
+        return
+
+    log.info("Checking every %d seconds. Press Ctrl+C to stop.", args.interval)
+    try:
+        while True:
+            try:
+                run_once(session, state, args.dry_run, args.debug)
+            except Exception:
+                log.exception("Unexpected error in this cycle.")
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        log.info("Stopped.")
+
+
+if __name__ == "__main__":
+    main()
+        
