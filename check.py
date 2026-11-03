@@ -28,10 +28,10 @@ TARGETS = [
 def send_telegram_with_button(message, url_link):
   url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-  # إضافة زر تفاعلي ينقلك فوراً للحجز على الموبايل
+  # زرار تفاعلي مباشر يفتح صفحة الحجز واختيار المواعيد والكراسي فوراً
   reply_markup = {
       "inline_keyboard": [[
-          {"text": "🎟️ فتح الجدول واختيار المعاد للحجز", "url": url_link}
+          {"text": "🎟️ فتح الجدول واختيار الكراسي مباشرة", "url": url_link}
       ]]
   }
 
@@ -71,22 +71,21 @@ def check_booking():
       response.raise_for_status()
       page_content = response.text.lower()
 
+      # التأكد من نزول المواعيد رسمياً على السيستم
       if "vox cinemas" in page_content and (
           "showtimes" in page_content
           or "book" in page_content
           or "tickets" in page_content
       ):
         alert_msg = (
-            f"🚨 **مواعيد الحجز نزلت على السيستم!** 🚨\n\n"
+            f"🚨 **المواعيد نزلت رسمياً في سيتي سنتر ألماظة!** 🚨\n\n"
             f"🎬 الفيلم: **{movie_name}**\n"
-            f"🎦 الصالة: **{hall_type}**\n"
-            f"📍 السينما: **سيتي سنتر ألماظة**\n\n"
-            f"👇 اضغط على الزر بالأسفل لفتح الجدول واختيار الموعد المناسب"
-            f" للحجز مباشرة:"
+            f"🎦 الصالة: **{hall_type}**\n\n"
+            f"👇 اضغط على الزر أدناه لاختيار الميعاد والكراسي فوراً:"
         )
         send_telegram_with_button(alert_msg, direct_link)
         time.sleep(2)
-        print(f"✅ تم رصد جدول لـ {movie_name} وإرسال الزر التفاعلي.")
+        print(f"✅ تم رصد جدول لـ {movie_name} وإرسال التنبيه التفاعلي.")
       else:
         print(
             f"⏳ فيلم '{movie_name}' صالة '{hall_type}' لسه مفيش مواعيد نزلت"
