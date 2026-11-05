@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-# VOX Cinemas - Specific Movies Showtimes Monitor
-# Dune: Part Three (IMAX) & Avengers: Doomsday (Infinity Vision)
-# City Centre Almaza -> Telegram
+# VOX Cinemas Showtimes Monitor -> Telegram
+# Dune: Part Three (IMAX)
+# Avengers: Doomsday (Infinity Vision)
+# City Centre Almaza
 
 import os
 import re
@@ -11,7 +12,7 @@ import hashlib
 import html
 import logging
 
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 from urllib.parse import urljoin, urlparse
 
@@ -30,6 +31,10 @@ from selenium.common.exceptions import (
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
+# Set SEND_STATUS=true if you want a status message
+# after every successful run.
+SEND_STATUS = os.getenv("SEND_STATUS", "false").lower() == "true"
 
 BASE_URL = (
     "https://egy.voxcinemas.com/"
@@ -70,7 +75,40 @@ TIME_PATTERN = re.compile(
 DATE_PATTERNS = [
     re.compile(r"\b(20\d{2}-\d{1,2}-\d{1,2})\b"),
     re.compile(r"\b(\d{1,2}/\d{1,2}/20\d{2})\b"),
-    re.compile(r"\b(\d{1,2}-\d{1,2}-20\d{2})\b")
+    re.compile(r"\b(\d{1,2}-\d{1,2}-20\d{2})\b"),
+    re.compile(
+        r"\b(\d{1,2}\s+"
+        r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|"
+        r"Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
+        r"Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
+        r"Nov(?:ember)?|Dec(?:ember)?)"
+        r"\s*,?\s*20\d{2})\b",
+        re.I
+    ),
+    re.compile(
+        r"\b((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|"
+        r"Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
+        r"Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
+        r"Nov(?:ember)?|Dec(?:ember)?)"
+        r"\s+\d{1,2}\s*,?\s*20\d{2})\b",
+        re.I
+    ),
+    re.compile(
+        r"\b(\d{1,2}\s+"
+        r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|"
+        r"Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
+        r"Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
+        r"Nov(?:ember)?|Dec(?:ember)?))\b",
+        re.I
+    ),
+    re.compile(
+        r"\b((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|"
+        r"Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
+        r"Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
+        r"Nov(?:ember)?|Dec(?:ember)?)"
+        r"\s+\d{1,2})\b",
+        re.I
+    )
 ]
 
 logging.basicConfig(
@@ -108,24 +146,67 @@ def parse_date(value):
 
     value = str(value).strip()
 
-    for pattern in DATE_PATTERNS:
+    # Relative date labels
+    lowered = value.lower()
+
+    if re.search(r"\btoday\b", lowered):
+        return now().date().isoformat()
+
+    if re.search(r"\btomorrow\b", lowered):
+        return (now().date() + timedelta(days=1)).isoformat()
+
+    for index, pattern in enumerate(DATE_PATTERNS):
         match = pattern.search(value)
 
-        if match:
-            raw = match.group(1)
+        if not match:
+            continue
 
-            for fmt in (
-                "%Y-%m-%d",
-                "%d/%m/%Y",
-                "%m/%d/%Y",
-                "%d-%m-%Y"
-            ):
-                try:
-                    return datetime.strptime(
-                        raw, fmt
-                    ).date().isoformat()
-                except ValueError:
-                    pass
+        raw = match.group(1).strip()
+
+        formats = []
+
+        if index == 0:
+            formats = ["%Y-%m-%d"]
+
+        elif index == 1:
+            # Egyptian date convention: DD/MM/YYYY
+            formats = ["%d/%m/%Y"]
+
+        elif index == 2:
+            formats = ["%d-%m-%Y"]
+
+        elif index == 3:
+            formats = ["%d %B %Y", "%d %b %Y"]
+
+        elif index == 4:
+            formats = ["%B %d %Y", "%b %d %Y"]
+
+        elif index == 5:
+            formats = ["%d %B", "%d %b"]
+
+        elif index == 6:
+            formats = ["%B %d", "%b %d"]
+
+        for fmt in formats:
+            try:
+                parsed = datetime.strptime(raw, fmt)
+
+                if "%Y" in fmt:
+                    return parsed.date().isoformat()
+
+                # A date without a year is interpreted using
+                # the current year, with year rollover for
+                # dates sufficiently far in the past.
+                today = now().date()
+                candidate = parsed.date().replace(year=today.year)
+
+                if candidate < today - timedelta(days=30):
+                    candidate = candidate.replace(year=today.year + 1)
+
+                return candidate.isoformat()
+
+            except ValueError:
+                continue
 
     return None
 
@@ -205,7 +286,7 @@ def send_telegram(message, button_url=None):
         return False
 
     url = (
-        f"https://api.telegram.org/"
+        "https://api.telegram.org/"
         f"bot{TELEGRAM_TOKEN}/sendMessage"
     )
 
@@ -277,6 +358,25 @@ def save_debug(driver, reason):
 
     except Exception as e:
         log.error("Debug saving failed: %s", e)
+
+
+def save_date_debug(movie, hall, candidates):
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+
+    path = os.path.join(DEBUG_DIR, "date_candidates.log")
+
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(
+                f"\n[{now().isoformat()}] "
+                f"Movie: {movie} | Hall: {hall}\n"
+            )
+
+            for candidate in candidates:
+                f.write(f"  - {candidate}\n")
+
+    except Exception as e:
+        log.error("Date debug saving failed: %s", e)
 
 
 # ================= BROWSER =================
@@ -392,55 +492,149 @@ def booking_is_open(link):
 
 # ================= DATE EXTRACTION =================
 
-def get_show_date(driver, element):
+def get_show_date(driver, element, movie="", hall=""):
+    """
+    Search for the date around the showtime group.
+
+    Never invent today's date when extraction fails.
+    Returns None if no reliable date is found.
+    """
+
+    candidates = []
+
     try:
-        # محاولة البحث عن التاريخ في العناصر المحيطة أو حاويات العروض
-        result = driver.execute_script("""
-            let el = arguments[0];
-            for (let i = 0; el && i < 8; i++) {
-                for (const attr of ['data-date', 'datetime', 'data-day', 'id']) {
-                    let value = el.getAttribute(attr);
-                    if (value) return value;
+        candidates = driver.execute_script("""
+            const start = arguments[0];
+            const found = [];
+            const seen = new Set();
+
+            function add(value) {
+                if (!value) return;
+
+                value = String(value).trim();
+
+                if (!value || seen.has(value)) return;
+
+                seen.add(value);
+                found.push(value);
+            }
+
+            function isDateElement(el) {
+                if (!el || !el.getAttribute) return false;
+
+                const marker = (
+                    (el.className || '') + ' ' +
+                    (el.id || '')
+                ).toLowerCase();
+
+                return /date|day|calendar/.test(marker);
+            }
+
+            let el = start;
+
+            for (let level = 0; el && level < 8; level++) {
+
+                // Explicit date attributes
+                for (const attr of [
+                    'data-date',
+                    'datetime',
+                    'data-day'
+                ]) {
+                    add(el.getAttribute(attr));
                 }
+
+                // Only accept ID when it looks date-related
+                const id = el.getAttribute('id') || '';
+
+                if (/date|day|calendar/i.test(id)) {
+                    add(id);
+                }
+
+                // Date-labelled element itself
+                if (isDateElement(el)) {
+                    add(el.innerText);
+                    add(el.textContent);
+                }
+
+                // Look at nearby preceding date labels
+                let sibling = el.previousElementSibling;
+
+                for (let j = 0; sibling && j < 4; j++) {
+                    if (isDateElement(sibling)) {
+                        add(sibling.getAttribute('data-date'));
+                        add(sibling.getAttribute('datetime'));
+                        add(sibling.innerText);
+                        add(sibling.textContent);
+                    }
+
+                    sibling = sibling.previousElementSibling;
+                }
+
+                // Direct children of the current container
+                if (el.children) {
+                    for (const child of el.children) {
+                        if (isDateElement(child)) {
+                            add(child.getAttribute('data-date'));
+                            add(child.getAttribute('datetime'));
+                            add(child.innerText);
+                            add(child.textContent);
+                        }
+                    }
+                }
+
                 el = el.parentElement;
             }
-            return null;
+
+            return found;
         """, element)
 
-        parsed = parse_date(result)
-        if parsed:
-            return parsed
+        if not isinstance(candidates, list):
+            candidates = []
 
-        # إذا لم يوجد في السمات، نبحث في النصوص المجاورة داخل حاوية التاريخ
-        container_text = driver.execute_script("""
-            let el = arguments[0];
-            for (let i = 0; el && i < 4; i++) {
-                el = el.parentElement;
-            }
-            return el ? el.innerText : '';
-        """, element)
+        # Test the closest candidates first
+        for candidate in candidates:
+            parsed = parse_date(candidate)
 
-        parsed = parse_date(container_text)
-        if parsed:
-            return parsed
+            if parsed:
+                log.info(
+                    "Date found for %s | %s: %s",
+                    movie,
+                    hall,
+                    parsed
+                )
+                return parsed
 
-    except Exception:
-        pass
+        save_date_debug(movie, hall, candidates)
 
-    # كحل احتياطي افتراضي تاريخ اليوم حتى لا يظهر Unknown
-    return now().date().isoformat()
+        log.warning(
+            "Date not found for %s | %s. Candidates: %s",
+            movie,
+            hall,
+            candidates[:15]
+        )
+
+    except Exception as e:
+        log.warning("Date extraction failed: %s", e)
+
+    return None
 
 
 # ================= MATCHING HELPERS =================
 
 def movie_matches(title, target):
     title = normalize(title)
-    return any(normalize(name) in title for name in target["match"])
+    return any(
+        normalize(name) in title
+        for name in target["match"]
+    )
 
 
 def hall_matches(name, target):
     name = normalize(name)
-    return any(normalize(hall) in name for hall in target["hall_match"])
+    return any(
+        normalize(hall) in name
+        for hall in target["hall_match"]
+    )
 
 
 # ================= EXTRACT TARGET SHOWTIMES =================
@@ -481,6 +675,12 @@ def extract_target_showtimes(driver, target):
                 "div.dates ol.showtimes > li"
             )
 
+            log.info(
+                "Hall groups found for %s: %s",
+                movie,
+                len(hall_groups)
+            )
+
             for group in hall_groups:
                 try:
                     strong = group.find_elements(
@@ -497,7 +697,12 @@ def extract_target_showtimes(driver, target):
                     if not hall_matches(hall, target):
                         continue
 
-                    show_date = get_show_date(driver, group)
+                    show_date = get_show_date(
+                        driver,
+                        group,
+                        movie,
+                        hall
+                    )
 
                     items = group.find_elements(
                         By.CSS_SELECTOR,
@@ -575,125 +780,4 @@ def extract_target_showtimes(driver, target):
 def process_results(results, state):
     for item_id, item in results.items():
         prev = state.get(item_id)
-
-        # New showtime
-        if not isinstance(prev, dict):
-            msg = (
-                "🆕 <b>NEW VOX SHOWTIME!</b>\n\n"
-                f"🎬 {html.escape(item['movie'])}\n"
-                f"🎦 Hall: {html.escape(item['hall'])}\n"
-                f"📅 Date: {html.escape(item['date'] or 'Unknown')}\n"
-                f"🕒 Time: {html.escape(item['time'])}\n"
-            )
-
-            if item["booking_open"]:
-                msg += (
-                    "\n🎟 <b>BOOKING AVAILABLE</b>\n"
-                    f'<a href="{html.escape(item["link"], quote=True)}">'
-                    "Open Booking</a>"
-                )
-            else:
-                msg += "\n⏳ Booking not confirmed yet"
-
-            if send_telegram(msg, item["link"] if item["booking_open"] else None):
-                state[item_id] = {
-                    "showtime_alerted": True,
-                    "booking_alerted": item["booking_open"],
-                    "booking_open": item["booking_open"]
-                }
-                save_state(state)
-
-            time.sleep(1)
-            continue
-
-        # Booking status transition
-        was_open = prev.get("booking_open", False)
-
-        if item["booking_open"] and not was_open:
-            msg = (
-                "🎟 <b>VOX BOOKING AVAILABLE!</b>\n\n"
-                f"🎬 {html.escape(item['movie'])}\n"
-                f"🎦 Hall: {html.escape(item['hall'])}\n"
-                f"📅 Date: {html.escape(item['date'] or 'Unknown')}\n"
-                f"🕒 Time: {html.escape(item['time'])}\n\n"
-                f'<a href="{html.escape(item["link"], quote=True)}">'
-                "🎟 OPEN BOOKING</a>"
-            )
-
-            if send_telegram(msg, item["link"]):
-                prev["booking_alerted"] = True
-
-            time.sleep(1)
-
-        if not item["booking_open"]:
-            prev["booking_alerted"] = False
-
-        prev["booking_open"] = item["booking_open"]
-        state[item_id] = prev
-        save_state(state)
-
-
-# ================= MAIN =================
-
-def main():
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        log.error("Missing TELEGRAM_TOKEN or CHAT_ID")
-        return
-
-    log.info("=" * 45)
-    log.info("VOX TARGETED MOVIES MONITOR STARTED")
-    log.info("Time: %s", now())
-    log.info("=" * 45)
-
-    state = load_state()
-    driver = None
-    successful_runs = 0
-
-    try:
-        driver = new_browser()
-
-        for target in TARGETS:
-            log.info("Checking target: %s | %s", target["movie"], target["hall"])
-
-            if not load_vox_page(driver, target["url"]):
-                log.error("Could not load page for %s", target["movie"])
-                continue
-
-            results = extract_target_showtimes(driver, target)
-            log.info("Found %s showtime(s) for %s", len(results), target["movie"])
-
-            process_results(results, state)
-            successful_runs += 1
-
-        if successful_runs > 0:
-            send_telegram(
-                "🟢 <b>VOX Monitor Status</b>\n\n"
-                f"📅 Time: {now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"🔍 Checked target movies successfully."
-            )
-
-        log.info("VOX check completed successfully")
-
-    except Exception as e:
-        log.exception("Monitor failed")
-        send_telegram(
-            "🔴 <b>VOX MONITOR ERROR</b>\n\n"
-            f"{html.escape(str(e)[:1000])}"
-        )
-        if driver:
-            save_debug(driver, "main_exception")
-
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
-
-        save_state(state)
-        log.info("Monitor finished")
-
-
-if __name__ == "__main__":
-    main()
-    
+        
