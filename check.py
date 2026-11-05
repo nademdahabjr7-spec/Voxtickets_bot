@@ -791,4 +791,4 @@ def main():
             driver.quit()
 
     save_state(state)
-    log.info("VOX monitoring comp
+    log.info("VOX monitoring comp)
