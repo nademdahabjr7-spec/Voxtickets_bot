@@ -170,7 +170,7 @@ def new_browser():
     )
 
     driver = webdriver.Chrome(options=options)
-    driver.set_page_load_timeout(35)
+    driver.set_page_load_timeout(20) # تم تقليل المهلة لمنع التعليق الطويل
 
     return driver
 
@@ -201,28 +201,28 @@ def save_debug(driver, name):
 # =====================================
 
 def load_vox_page(driver, url):
-    for attempt in range(1, 4):
+    # تم تقليل عدد المحاولات إلى محاولة واحدة أو محاولتين لتسريع العملية وعدم الانتظار طويلاً
+    for attempt in range(1, 3):
         try:
             print(f"Loading page (attempt {attempt}): {url}")
 
             try:
                 driver.get(url)
             except Exception:
-                # Some pages may finish loading despite a timeout.
                 pass
 
-            WebDriverWait(driver, 25).until(
+            WebDriverWait(driver, 15).until(
                 EC.presence_of_element_located(
                     (By.CSS_SELECTOR, "article.movie-compare")
                 )
             )
 
-            time.sleep(2)
+            time.sleep(1)
             return True
 
         except Exception as error:
             print(f"Page load failed: {type(error).__name__}")
-            time.sleep(3)
+            time.sleep(2)
 
     return False
 
@@ -287,9 +287,6 @@ def hall_matches(name, target):
     if target["hall"] == "IMAX":
         return "imax" in normalized
 
-    # Infinity Vision is the movie format; MAX is the
-    # requested auditorium label. Accept either label
-    # because VOX may display them differently.
     return "max" in normalized or "infinity vision" in normalized
 
 
@@ -445,7 +442,6 @@ def process_results(results, state):
         if not isinstance(previous, dict):
             previous = {}
 
-        # First notification: new showtime
         if not previous.get("showtime_alerted"):
             if send_new_showtime(item):
                 previous["showtime_alerted"] = True
@@ -456,7 +452,6 @@ def process_results(results, state):
 
             time.sleep(1)
 
-        # Second notification: booking becomes available
         if item["booking_open"] and not previous.get("booking_alerted"):
             if send_booking_open(item):
                 previous["booking_alerted"] = True
@@ -510,12 +505,17 @@ def main():
                     target_date
                 )
 
+                # التعديل هنا: إذا حدث Timeout أو لم تحمل الصفحة في اليوم المستقبلي، نتخطاه فوراً بدلاً من تضييع الوقت
                 if target_date != now().date():
-                    if not load_vox_page(driver, url):
-                        save_debug(
-                            driver,
-                            f"vox_{target_date.isoformat()}"
+                    try:
+                        driver.get(url)
+                        WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located(
+                                (By.CSS_SELECTOR, "article.movie-compare")
+                            )
                         )
+                    except Exception:
+                        print(f"Skipping date {target_date} due to timeout/not found.")
                         continue
 
                 results = extract_target_showtimes(
@@ -549,4 +549,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+                
