@@ -30,11 +30,11 @@ def extract_showtimes(driver):
                 continue
 
             movie_title = titles[0].text.strip()
-            normalized_title = normalize(movie_title)
             
-            # طباعة اسم كل فيلم يتم العثور عليه في الصفحة لكي نراه في الـ Logs
+            # طباعة اسم الفيلم هنا لكي يظهر في الـ Logs بوضوح
             log.info("Found on page -> Movie: '%s'", movie_title)
 
+            normalized_title = normalize(movie_title)
             matched_key = None
 
             for key, target in TARGETS.items():
