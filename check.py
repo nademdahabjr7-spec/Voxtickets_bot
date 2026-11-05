@@ -1,8 +1,6 @@
-#!/usr/bin/env python3
-# VOX Cinemas Showtimes Monitor -> Telegram
-# Dune: Part Three (IMAX)
-# Avengers: Doomsday (Infinity Vision)
-# City Centre Almaza
+#!/usr/init/env python3
+# VOX Cinemas - Targeted Movies Monitor (Main Page Search)
+# City Centre Almaza -> Telegram
 
 import os
 import re
@@ -12,7 +10,7 @@ import hashlib
 import html
 import logging
 
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from urllib.parse import urljoin, urlparse
 
@@ -32,10 +30,6 @@ from selenium.common.exceptions import (
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
-# Set SEND_STATUS=true if you want a status message
-# after every successful run.
-SEND_STATUS = os.getenv("SEND_STATUS", "false").lower() == "true"
-
 BASE_URL = (
     "https://egy.voxcinemas.com/"
     "showtimes?c=city-centre-almaza"
@@ -44,20 +38,15 @@ BASE_URL = (
 TARGETS = [
     {
         "movie": "Dune: Part Three",
-        "match": ["dune part three"],
+        "match": ["dune part three", "dune"],
         "hall": "IMAX",
         "hall_match": ["imax"],
-        "url": BASE_URL + "&m=dune-part-three",
     },
     {
         "movie": "Avengers: Doomsday (Infinity Vision)",
-        "match": [
-            "avengers doomsday",
-            "avengers doomsday infinity vision",
-        ],
+        "match": ["avengers doomsday", "infinity vision"],
         "hall": "Infinity Vision",
-        "hall_match": ["infinity vision"],
-        "url": BASE_URL + "&m=avengers-doomsday-infinity-vision",
+        "hall_match": ["infinity vision", "infinity"],
     },
 ]
 
@@ -75,40 +64,7 @@ TIME_PATTERN = re.compile(
 DATE_PATTERNS = [
     re.compile(r"\b(20\d{2}-\d{1,2}-\d{1,2})\b"),
     re.compile(r"\b(\d{1,2}/\d{1,2}/20\d{2})\b"),
-    re.compile(r"\b(\d{1,2}-\d{1,2}-20\d{2})\b"),
-    re.compile(
-        r"\b(\d{1,2}\s+"
-        r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|"
-        r"Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
-        r"Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
-        r"Nov(?:ember)?|Dec(?:ember)?)"
-        r"\s*,?\s*20\d{2})\b",
-        re.I
-    ),
-    re.compile(
-        r"\b((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|"
-        r"Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
-        r"Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
-        r"Nov(?:ember)?|Dec(?:ember)?)"
-        r"\s+\d{1,2}\s*,?\s*20\d{2})\b",
-        re.I
-    ),
-    re.compile(
-        r"\b(\d{1,2}\s+"
-        r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|"
-        r"Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
-        r"Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
-        r"Nov(?:ember)?|Dec(?:ember)?))\b",
-        re.I
-    ),
-    re.compile(
-        r"\b((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|"
-        r"Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
-        r"Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|"
-        r"Nov(?:ember)?|Dec(?:ember)?)"
-        r"\s+\d{1,2})\b",
-        re.I
-    )
+    re.compile(r"\b(\d{1,2}-\d{1,2}-20\d{2})\b")
 ]
 
 logging.basicConfig(
@@ -146,67 +102,24 @@ def parse_date(value):
 
     value = str(value).strip()
 
-    # Relative date labels
-    lowered = value.lower()
-
-    if re.search(r"\btoday\b", lowered):
-        return now().date().isoformat()
-
-    if re.search(r"\btomorrow\b", lowered):
-        return (now().date() + timedelta(days=1)).isoformat()
-
-    for index, pattern in enumerate(DATE_PATTERNS):
+    for pattern in DATE_PATTERNS:
         match = pattern.search(value)
 
-        if not match:
-            continue
+        if match:
+            raw = match.group(1)
 
-        raw = match.group(1).strip()
-
-        formats = []
-
-        if index == 0:
-            formats = ["%Y-%m-%d"]
-
-        elif index == 1:
-            # Egyptian date convention: DD/MM/YYYY
-            formats = ["%d/%m/%Y"]
-
-        elif index == 2:
-            formats = ["%d-%m-%Y"]
-
-        elif index == 3:
-            formats = ["%d %B %Y", "%d %b %Y"]
-
-        elif index == 4:
-            formats = ["%B %d %Y", "%b %d %Y"]
-
-        elif index == 5:
-            formats = ["%d %B", "%d %b"]
-
-        elif index == 6:
-            formats = ["%B %d", "%b %d"]
-
-        for fmt in formats:
-            try:
-                parsed = datetime.strptime(raw, fmt)
-
-                if "%Y" in fmt:
-                    return parsed.date().isoformat()
-
-                # A date without a year is interpreted using
-                # the current year, with year rollover for
-                # dates sufficiently far in the past.
-                today = now().date()
-                candidate = parsed.date().replace(year=today.year)
-
-                if candidate < today - timedelta(days=30):
-                    candidate = candidate.replace(year=today.year + 1)
-
-                return candidate.isoformat()
-
-            except ValueError:
-                continue
+            for fmt in (
+                "%Y-%m-%d",
+                "%d/%m/%Y",
+                "%m/%d/%Y",
+                "%d-%m-%Y"
+            ):
+                try:
+                    return datetime.strptime(
+                        raw, fmt
+                    ).date().isoformat()
+                except ValueError:
+                    pass
 
     return None
 
@@ -286,7 +199,7 @@ def send_telegram(message, button_url=None):
         return False
 
     url = (
-        "https://api.telegram.org/"
+        f"https://api.telegram.org/"
         f"bot{TELEGRAM_TOKEN}/sendMessage"
     )
 
@@ -360,25 +273,6 @@ def save_debug(driver, reason):
         log.error("Debug saving failed: %s", e)
 
 
-def save_date_debug(movie, hall, candidates):
-    os.makedirs(DEBUG_DIR, exist_ok=True)
-
-    path = os.path.join(DEBUG_DIR, "date_candidates.log")
-
-    try:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(
-                f"\n[{now().isoformat()}] "
-                f"Movie: {movie} | Hall: {hall}\n"
-            )
-
-            for candidate in candidates:
-                f.write(f"  - {candidate}\n")
-
-    except Exception as e:
-        log.error("Date debug saving failed: %s", e)
-
-
 # ================= BROWSER =================
 
 def new_browser():
@@ -404,15 +298,11 @@ def new_browser():
     return driver
 
 
-def load_vox_page(driver, url):
+def load_vox_page(driver):
     for attempt in range(3):
         try:
-            log.info(
-                "Opening VOX page: attempt %s",
-                attempt + 1
-            )
-
-            driver.get(url)
+            log.info("Opening VOX main page: attempt %s", attempt + 1)
+            driver.get(BASE_URL)
 
             WebDriverWait(driver, 25).until(
                 lambda d: d.execute_script(
@@ -423,15 +313,10 @@ def load_vox_page(driver, url):
             time.sleep(5)
 
             page_text = normalize(
-                driver.find_element(
-                    By.TAG_NAME, "body"
-                ).text
+                driver.find_element(By.TAG_NAME, "body").text
             )
 
-            if (
-                "access denied" in page_text
-                or "403 forbidden" in page_text
-            ):
+            if "access denied" in page_text or "403 forbidden" in page_text:
                 raise RuntimeError("VOX Access Denied")
 
             return True
@@ -453,37 +338,22 @@ def booking_is_open(link):
     try:
         href = link.get_attribute("href") or ""
 
-        if not href:
-            return False
-
-        if href.startswith(("javascript:", "#")):
+        if not href or href.startswith(("javascript:", "#")):
             return False
 
         if link.get_attribute("disabled") is not None:
             return False
 
-        if (
-            link.get_attribute("aria-disabled") or ""
-        ).lower() == "true":
+        if (link.get_attribute("aria-disabled") or "").lower() == "true":
             return False
 
-        classes = normalize(
-            link.get_attribute("class") or ""
-        )
-
-        blocked_classes = [
-            "disabled",
-            "unavailable",
-            "sold out",
-            "soldout",
-            "not available"
-        ]
+        classes = normalize(link.get_attribute("class") or "")
+        blocked_classes = ["disabled", "unavailable", "sold out", "soldout", "not available"]
 
         if any(x in classes for x in blocked_classes):
             return False
 
         parsed = urlparse(href)
-
         return parsed.scheme in ("http", "https")
 
     except StaleElementReferenceException:
@@ -492,271 +362,117 @@ def booking_is_open(link):
 
 # ================= DATE EXTRACTION =================
 
-def get_show_date(driver, element, movie="", hall=""):
-    """
-    Search for the date around the showtime group.
-
-    Never invent today's date when extraction fails.
-    Returns None if no reliable date is found.
-    """
-
-    candidates = []
-
+def get_show_date(driver, element):
     try:
-        candidates = driver.execute_script("""
-            const start = arguments[0];
-            const found = [];
-            const seen = new Set();
-
-            function add(value) {
-                if (!value) return;
-
-                value = String(value).trim();
-
-                if (!value || seen.has(value)) return;
-
-                seen.add(value);
-                found.push(value);
-            }
-
-            function isDateElement(el) {
-                if (!el || !el.getAttribute) return false;
-
-                const marker = (
-                    (el.className || '') + ' ' +
-                    (el.id || '')
-                ).toLowerCase();
-
-                return /date|day|calendar/.test(marker);
-            }
-
-            let el = start;
-
-            for (let level = 0; el && level < 8; level++) {
-
-                // Explicit date attributes
-                for (const attr of [
-                    'data-date',
-                    'datetime',
-                    'data-day'
-                ]) {
-                    add(el.getAttribute(attr));
+        result = driver.execute_script("""
+            let el = arguments[0];
+            for (let i = 0; el && i < 8; i++) {
+                for (const attr of ['data-date', 'datetime', 'data-day', 'id']) {
+                    let value = el.getAttribute(attr);
+                    if (value) return value;
                 }
-
-                // Only accept ID when it looks date-related
-                const id = el.getAttribute('id') || '';
-
-                if (/date|day|calendar/i.test(id)) {
-                    add(id);
-                }
-
-                // Date-labelled element itself
-                if (isDateElement(el)) {
-                    add(el.innerText);
-                    add(el.textContent);
-                }
-
-                // Look at nearby preceding date labels
-                let sibling = el.previousElementSibling;
-
-                for (let j = 0; sibling && j < 4; j++) {
-                    if (isDateElement(sibling)) {
-                        add(sibling.getAttribute('data-date'));
-                        add(sibling.getAttribute('datetime'));
-                        add(sibling.innerText);
-                        add(sibling.textContent);
-                    }
-
-                    sibling = sibling.previousElementSibling;
-                }
-
-                // Direct children of the current container
-                if (el.children) {
-                    for (const child of el.children) {
-                        if (isDateElement(child)) {
-                            add(child.getAttribute('data-date'));
-                            add(child.getAttribute('datetime'));
-                            add(child.innerText);
-                            add(child.textContent);
-                        }
-                    }
-                }
-
                 el = el.parentElement;
             }
-
-            return found;
+            return null;
         """, element)
 
-        if not isinstance(candidates, list):
-            candidates = []
+        parsed = parse_date(result)
+        if parsed:
+            return parsed
 
-        # Test the closest candidates first
-        for candidate in candidates:
-            parsed = parse_date(candidate)
+        container_text = driver.execute_script("""
+            let el = arguments[0];
+            for (let i = 0; el && i < 4; i++) {
+                el = el.parentElement;
+            }
+            return el ? el.innerText : '';
+        """, element)
 
-            if parsed:
-                log.info(
-                    "Date found for %s | %s: %s",
-                    movie,
-                    hall,
-                    parsed
-                )
-                return parsed
+        parsed = parse_date(container_text)
+        if parsed:
+            return parsed
 
-        save_date_debug(movie, hall, candidates)
+    except Exception:
+        pass
 
-        log.warning(
-            "Date not found for %s | %s. Candidates: %s",
-            movie,
-            hall,
-            candidates[:15]
-        )
-
-    except Exception as e:
-        log.warning("Date extraction failed: %s", e)
-
-    return None
+    return now().date().isoformat()
 
 
-# ================= MATCHING HELPERS =================
+# ================= EXTRACT AND FILTER =================
 
-def movie_matches(title, target):
-    title = normalize(title)
-    return any(
-        normalize(name) in title
-        for name in target["match"]
-    )
-
-
-def hall_matches(name, target):
-    name = normalize(name)
-    return any(
-        normalize(hall) in name
-        for hall in target["hall_match"]
-    )
-
-
-# ================= EXTRACT TARGET SHOWTIMES =================
-
-def extract_target_showtimes(driver, target):
+def extract_and_filter_showtimes(driver):
     results = {}
 
-    articles = driver.find_elements(
-        By.CSS_SELECTOR,
-        "article.movie-compare"
-    )
+    articles = driver.find_elements(By.CSS_SELECTOR, "article.movie-compare")
+    log.info("Total movie containers found on page: %s", len(articles))
 
-    log.info(
-        "Movie containers found for %s: %s",
-        target["movie"],
-        len(articles)
-    )
+    if not articles:
+        save_debug(driver, "no_movie_containers")
+        return results
 
     for article in articles:
         try:
-            titles = article.find_elements(
-                By.CSS_SELECTOR,
-                "h2"
-            )
-
+            titles = article.find_elements(By.CSS_SELECTOR, "h2")
             if not titles:
                 continue
 
-            movie = safe_text(titles[0])
+            movie_title = safe_text(titles[0])
+            norm_movie = normalize(movie_title)
 
-            if not movie or not movie_matches(movie, target):
+            # مطابقة الفيلم مع الأهداف المطلوبة
+            matched_target = None
+            for target in TARGETS:
+                if any(m in norm_movie for m in target["match"]):
+                    matched_target = target
+                    break
+
+            if not matched_target:
                 continue
 
-            log.info("Target movie matched: %s", movie)
+            log.info("Matched target movie on page: %s", movie_title)
 
-            hall_groups = article.find_elements(
-                By.CSS_SELECTOR,
-                "div.dates ol.showtimes > li"
-            )
-
-            log.info(
-                "Hall groups found for %s: %s",
-                movie,
-                len(hall_groups)
-            )
+            hall_groups = article.find_elements(By.CSS_SELECTOR, "div.dates ol.showtimes > li")
 
             for group in hall_groups:
                 try:
-                    strong = group.find_elements(
-                        By.TAG_NAME,
-                        "strong"
-                    )
+                    strong = group.find_elements(By.TAG_NAME, "strong")
+                    hall_text = safe_text(strong[0]) if strong else safe_text(group)
+                    norm_hall = normalize(hall_text)
 
-                    hall = (
-                        safe_text(strong[0])
-                        if strong
-                        else safe_text(group)
-                    )
-
-                    if not hall_matches(hall, target):
+                    # مطابقة قاعة العرض (IMAX / Infinity Vision)
+                    if not any(h in norm_hall for h in matched_target["hall_match"]):
                         continue
 
-                    show_date = get_show_date(
-                        driver,
-                        group,
-                        movie,
-                        hall
-                    )
-
-                    items = group.find_elements(
-                        By.CSS_SELECTOR,
-                        "ol > li"
-                    )
+                    show_date = get_show_date(driver, group)
+                    items = group.find_elements(By.CSS_SELECTOR, "ol > li")
 
                     for item in items:
                         try:
-                            links = item.find_elements(
-                                By.CSS_SELECTOR,
-                                "a.showtime"
-                            )
-
+                            links = item.find_elements(By.CSS_SELECTOR, "a.showtime")
                             link = links[0] if links else None
 
-                            text = (
-                                safe_text(link)
-                                if link
-                                else safe_text(item)
-                            )
-
+                            text = safe_text(link) if link else safe_text(item)
                             match = TIME_PATTERN.search(text)
 
                             if not match:
                                 continue
 
-                            showtime = normalize_time(
-                                match.group(0)
-                            )
-
+                            showtime = normalize_time(match.group(0))
                             booking_open = booking_is_open(link)
 
-                            href = (
-                                link.get_attribute("href")
-                                if link
-                                else None
-                            )
-
-                            booking_url = (
-                                urljoin(target["url"], href)
-                                if href
-                                else target["url"]
-                            )
+                            href = link.get_attribute("href") if link else None
+                            booking_url = urljoin(BASE_URL, href) if href else BASE_URL
 
                             item_id = make_id(
-                                target["movie"],
-                                target["hall"],
+                                matched_target["movie"],
+                                matched_target["hall"],
                                 show_date,
                                 showtime
                             )
 
                             results[item_id] = {
-                                "movie": target["movie"],
-                                "hall": target["hall"],
+                                "movie": matched_target["movie"],
+                                "hall": matched_target["hall"],
                                 "date": show_date,
                                 "time": showtime,
                                 "booking_open": booking_open,
@@ -772,6 +488,7 @@ def extract_target_showtimes(driver, target):
         except StaleElementReferenceException:
             continue
 
+    log.info("Extracted %s showtime(s) for target movies.", len(results))
     return results
 
 
@@ -780,4 +497,118 @@ def extract_target_showtimes(driver, target):
 def process_results(results, state):
     for item_id, item in results.items():
         prev = state.get(item_id)
-        
+
+        if not isinstance(prev, dict):
+            msg = (
+                "🆕 <b>NEW VOX SHOWTIME!</b>\n\n"
+                f"🎬 {html.escape(item['movie'])}\n"
+                f"🎦 Hall: {html.escape(item['hall'])}\n"
+                f"📅 Date: {html.escape(item['date'] or 'Unknown')}\n"
+                f"🕒 Time: {html.escape(item['time'])}\n"
+            )
+
+            if item["booking_open"]:
+                msg += (
+                    "\n🎟 <b>BOOKING AVAILABLE</b>\n"
+                    f'<a href="{html.escape(item["link"], quote=True)}">'
+                    "Open Booking</a>"
+                )
+            else:
+                msg += "\n⏳ Booking not confirmed yet"
+
+            if send_telegram(msg, item["link"] if item["booking_open"] else None):
+                state[item_id] = {
+                    "showtime_alerted": True,
+                    "booking_alerted": item["booking_open"],
+                    "booking_open": item["booking_open"]
+                }
+                save_state(state)
+
+            time.sleep(1)
+            continue
+
+        was_open = prev.get("booking_open", False)
+
+        if item["booking_open"] and not was_open:
+            msg = (
+                "🎟 <b>VOX BOOKING AVAILABLE!</b>\n\n"
+                f"🎬 {html.escape(item['movie'])}\n"
+                f"🎦 Hall: {html.escape(item['hall'])}\n"
+                f"📅 Date: {html.escape(item['date'] or 'Unknown')}\n"
+                f"🕒 Time: {html.escape(item['time'])}\n\n"
+                f'<a href="{html.escape(item["link"], quote=True)}">'
+                "🎟 OPEN BOOKING</a>"
+            )
+
+            if send_telegram(msg, item["link"]):
+                prev["booking_alerted"] = True
+
+            time.sleep(1)
+
+        if not item["booking_open"]:
+            prev["booking_alerted"] = False
+
+        prev["booking_open"] = item["booking_open"]
+        state[item_id] = prev
+        save_state(state)
+
+
+# ================= MAIN =================
+
+def main():
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        log.error("Missing TELEGRAM_TOKEN or CHAT_ID")
+        return
+
+    log.info("=" * 45)
+    log.info("VOX TARGETED MONITOR STARTED")
+    log.info("Time: %s", now())
+    log.info("=" * 45)
+
+    state = load_state()
+    driver = None
+
+    try:
+        driver = new_browser()
+
+        if not load_vox_page(driver):
+            send_telegram(
+                "🔴 <b>VOX MONITOR ERROR</b>\n"
+                "Could not load the VOX main showtimes page."
+            )
+            return
+
+        results = extract_and_filter_showtimes(driver)
+        process_results(results, state)
+
+        send_telegram(
+            "🟢 <b>VOX Monitor Status</b>\n\n"
+            f"📅 Time: {now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"🔍 Checked page successfully. Found {len(results)} target showtime(s)."
+        )
+
+        log.info("VOX check completed successfully")
+
+    except Exception as e:
+        log.exception("Monitor failed")
+        send_telegram(
+            "🔴 <b>VOX MONITOR ERROR</b>\n\n"
+            f"{html.escape(str(e)[:1000])}"
+        )
+        if driver:
+            save_debug(driver, "main_exception")
+
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
+
+        save_state(state)
+        log.info("Monitor finished")
+
+
+if __name__ == "__main__":
+    main()
+                
