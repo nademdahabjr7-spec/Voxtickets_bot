@@ -25,7 +25,6 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9,ar;q=0.8"
 }
 
-# رابط صفحة العروض العامة لسينما سيتي سنتر ألماظة
 MOVIES_URL = "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza"
 FALLBACK_QUERY = "site:egy.voxcinemas.com city-centre-almaza showtimes"
 
@@ -142,18 +141,15 @@ def extract_all_showtimes(html):
         if not BOOKING_PATTERN.search(text) and not booking_links:
             continue
 
-        # محاولة استخراج اسم الفيلم من العناوين داخل المكون
         movie_name = "Unknown Movie"
         heading = tag.find(["h1", "h2", "h3", "h4", "strong"])
         if heading:
             movie_name = heading.get_text(" ", strip=True)
         else:
-            # استخدام أجزاء من النص إذا لم يوجد عنوان صريح
             lines = [line.strip() for line in text.split("\n") if len(line.strip()) > 3]
             if lines:
                 movie_name = lines[0]
 
-        # تنظيف اسم الفيلم لو كان طويلاً جداً
         if len(movie_name) > 60:
             movie_name = movie_name[:60] + "..."
 
@@ -161,7 +157,6 @@ def extract_all_showtimes(html):
         time_value = times[0].strip()
         booking_link = booking_links[0] if booking_links else MOVIES_URL
 
-        # تحديد نوع القاعة إن وجدت (IMAX / MAX / Standard)
         hall_type = "Standard"
         if re.search(r"\bIMAX\b", text, re.I):
             hall_type = "IMAX"
@@ -202,5 +197,29 @@ def fetch_movies(session):
 
     if not success:
         try:
-            search_url = f"
-            
+            search_url = f"https://html.duckduckgo.com/html/?q={FALLBACK_QUERY}"
+            response = session.get(search_url, timeout=15)
+            if response.status_code in (200, 202) and len(response.text) > 300:
+                html = response.text
+                success = True
+                print("🔍 Fallback search fetch successful.")
+            else:
+                print(f"❌ Search fallback returned HTTP {response.status_code}")
+        except requests.RequestException as error:
+            print(f"❌ Connection error on fallback: {error}")
+            return None
+
+    if not success or len(html) < 200:
+        print("⚠️ Invalid or empty page content.")
+        return None
+
+    return extract_all_showtimes(html)
+
+# =====================================
+# MAIN
+# =====================================
+
+def main():
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+
+        
