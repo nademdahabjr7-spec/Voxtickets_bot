@@ -683,6 +683,16 @@ def send_booking_open(item):
     return send_telegram(message, item["link"])
 
 
+def send_status_report(successful_pages):
+    message = (
+        "🟢 <b>VOX Monitor Status</b>\n\n"
+        f"📅 Time: {now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"🔍 Checked {successful_pages} target(s) successfully.\n"
+        "Status: Bot is running and monitoring normally."
+    )
+    send_telegram(message)
+
+
 # =====================================
 # PROCESS RESULTS
 # =====================================
@@ -776,19 +786,4 @@ def main():
                 "Showtimes found for %s: %s",
                 target["movie"],
                 len(results)
-            )
-
-            process_results(results, state)
-
-    except Exception as error:
-        log.error("Critical error in monitor: %s", error)
-
-        if driver:
-            save_debug(driver, "critical_error")
-
-    finally:
-        if driver:
-            driver.quit()
-
-    save_state(state)
-    log.info("VOX monitoring comp")
+            
