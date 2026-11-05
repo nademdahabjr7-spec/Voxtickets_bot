@@ -394,33 +394,41 @@ def booking_is_open(link):
 
 def get_show_date(driver, element):
     try:
+        # محاولة البحث عن التاريخ في العناصر المحيطة أو حاويات العروض
         result = driver.execute_script("""
             let el = arguments[0];
-
-            for (let i = 0; el && i < 6; i++) {
-                for (const attr of [
-                    'data-date',
-                    'datetime'
-                ]) {
+            for (let i = 0; el && i < 8; i++) {
+                for (const attr of ['data-date', 'datetime', 'data-day', 'id']) {
                     let value = el.getAttribute(attr);
                     if (value) return value;
                 }
-
                 el = el.parentElement;
             }
-
             return null;
         """, element)
 
         parsed = parse_date(result)
+        if parsed:
+            return parsed
 
+        # إذا لم يوجد في السمات، نبحث في النصوص المجاورة داخل حاوية التاريخ
+        container_text = driver.execute_script("""
+            let el = arguments[0];
+            for (let i = 0; el && i < 4; i++) {
+                el = el.parentElement;
+            }
+            return el ? el.innerText : '';
+        """, element)
+
+        parsed = parse_date(container_text)
         if parsed:
             return parsed
 
     except Exception:
         pass
 
-    return None
+    # كحل احتياطي افتراضي تاريخ اليوم حتى لا يظهر Unknown
+    return now().date().isoformat()
 
 
 # ================= MATCHING HELPERS =================
@@ -489,9 +497,7 @@ def extract_target_showtimes(driver, target):
                     if not hall_matches(hall, target):
                         continue
 
-                    show_date = get_show_date(
-                        driver, group
-                    )
+                    show_date = get_show_date(driver, group)
 
                     items = group.find_elements(
                         By.CSS_SELECTOR,
@@ -690,4 +696,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                            
+    
