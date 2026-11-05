@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-# VOX Cinemas - All Movies Showtimes Monitor
+# VOX Cinemas - Specific Movies Showtimes Monitor
+# Dune: Part Three (IMAX) & Avengers: Doomsday (Infinity Vision)
 # City Centre Almaza -> Telegram
 
 import os
@@ -34,6 +35,26 @@ BASE_URL = (
     "https://egy.voxcinemas.com/"
     "showtimes?c=city-centre-almaza"
 )
+
+TARGETS = [
+    {
+        "movie": "Dune: Part Three",
+        "match": ["dune part three"],
+        "hall": "IMAX",
+        "hall_match": ["imax"],
+        "url": BASE_URL + "&m=dune-part-three",
+    },
+    {
+        "movie": "Avengers: Doomsday (Infinity Vision)",
+        "match": [
+            "avengers doomsday",
+            "avengers doomsday infinity vision",
+        ],
+        "hall": "Infinity Vision",
+        "hall_match": ["infinity vision"],
+        "url": BASE_URL + "&m=avengers-doomsday-infinity-vision",
+    },
+]
 
 STATE_FILE = "showtimes_state.json"
 DEBUG_DIR = "debug"
@@ -178,7 +199,7 @@ def save_state(state):
 
 # ================= TELEGRAM =================
 
-def send_telegram(message):
+def send_telegram(message, button_url=None):
     if not TELEGRAM_TOKEN or not CHAT_ID:
         log.error("Telegram credentials missing")
         return False
@@ -194,6 +215,16 @@ def send_telegram(message):
         "parse_mode": "HTML",
         "disable_web_page_preview": True
     }
+
+    if button_url:
+        payload["reply_markup"] = {
+            "inline_keyboard": [[
+                {
+                    "text": "🎟 Open VOX Booking",
+                    "url": button_url,
+                }
+            ]]
+        }
 
     for attempt in range(3):
         try:
@@ -268,13 +299,12 @@ def new_browser():
     )
 
     driver = webdriver.Chrome(options=options)
-
     driver.set_page_load_timeout(40)
 
     return driver
 
 
-def load_vox_page(driver):
+def load_vox_page(driver, url):
     for attempt in range(3):
         try:
             log.info(
@@ -282,7 +312,7 @@ def load_vox_page(driver):
                 attempt + 1
             )
 
-            driver.get(BASE_URL)
+            driver.get(url)
 
             WebDriverWait(driver, 25).until(
                 lambda d: d.execute_script(
@@ -311,7 +341,6 @@ def load_vox_page(driver):
             time.sleep(5)
 
     save_debug(driver, "page_loading_failed")
-
     return False
 
 
@@ -394,9 +423,21 @@ def get_show_date(driver, element):
     return None
 
 
-# ================= EXTRACT ALL MOVIES =================
+# ================= MATCHING HELPERS =================
 
-def extract_all_showtimes(driver):
+def movie_matches(title, target):
+    title = normalize(title)
+    return any(normalize(name) in title for name in target["match"])
+
+
+def hall_matches(name, target):
+    name = normalize(name)
+    return any(normalize(hall) in name for hall in target["hall_match"])
+
+
+# ================= EXTRACT TARGET SHOWTIMES =================
+
+def extract_target_showtimes(driver, target):
     results = {}
 
     articles = driver.find_elements(
@@ -405,16 +446,12 @@ def extract_all_showtimes(driver):
     )
 
     log.info(
-        "Movie containers found: %s",
+        "Movie containers found for %s: %s",
+        target["movie"],
         len(articles)
     )
 
-    if not articles:
-        save_debug(driver, "no_movie_containers")
-        return results
-
     for article in articles:
-
         try:
             titles = article.find_elements(
                 By.CSS_SELECTOR,
@@ -426,10 +463,10 @@ def extract_all_showtimes(driver):
 
             movie = safe_text(titles[0])
 
-            if not movie:
+            if not movie or not movie_matches(movie, target):
                 continue
 
-            log.info("Movie found: %s", movie)
+            log.info("Target movie matched: %s", movie)
 
             hall_groups = article.find_elements(
                 By.CSS_SELECTOR,
@@ -437,7 +474,6 @@ def extract_all_showtimes(driver):
             )
 
             for group in hall_groups:
-
                 try:
                     strong = group.find_elements(
                         By.TAG_NAME,
@@ -447,8 +483,11 @@ def extract_all_showtimes(driver):
                     hall = (
                         safe_text(strong[0])
                         if strong
-                        else "Unknown Hall"
+                        else safe_text(group)
                     )
+
+                    if not hall_matches(hall, target):
+                        continue
 
                     show_date = get_show_date(
                         driver, group
@@ -460,7 +499,6 @@ def extract_all_showtimes(driver):
                     )
 
                     for item in items:
-
                         try:
                             links = item.find_elements(
                                 By.CSS_SELECTOR,
@@ -484,9 +522,7 @@ def extract_all_showtimes(driver):
                                 match.group(0)
                             )
 
-                            booking_open = booking_is_open(
-                                link
-                            )
+                            booking_open = booking_is_open(link)
 
                             href = (
                                 link.get_attribute("href")
@@ -495,21 +531,21 @@ def extract_all_showtimes(driver):
                             )
 
                             booking_url = (
-                                urljoin(BASE_URL, href)
+                                urljoin(target["url"], href)
                                 if href
-                                else BASE_URL
+                                else target["url"]
                             )
 
                             item_id = make_id(
-                                movie,
-                                hall,
+                                target["movie"],
+                                target["hall"],
                                 show_date,
                                 showtime
                             )
 
                             results[item_id] = {
-                                "movie": movie,
-                                "hall": hall,
+                                "movie": target["movie"],
+                                "hall": target["hall"],
                                 "date": show_date,
                                 "time": showtime,
                                 "booking_open": booking_open,
@@ -525,116 +561,22 @@ def extract_all_showtimes(driver):
         except StaleElementReferenceException:
             continue
 
-    log.info(
-        "Total showtimes extracted: %s",
-        len(results)
-    )
-
     return results
-
-
-# ================= MESSAGE FORMAT =================
-
-def format_showtime(item, booking_label=True):
-    show_date = item["date"] or "Date unavailable"
-
-    line = (
-        f"🕒 {html.escape(show_date)}"
-        f" | {html.escape(item['time'])}"
-    )
-
-    if booking_label:
-        if item["booking_open"]:
-            safe_url = html.escape(
-                item["link"],
-                quote=True
-            )
-
-            line += (
-                f' | <a href="{safe_url}">'
-                f'🎟 Book Now</a>'
-            )
-        else:
-            line += " | ⏳ Booking not confirmed"
-
-    return line
-
-
-def send_initial_report(results):
-    if not results:
-        return False
-
-    grouped = {}
-
-    for item in results.values():
-        key = (item["movie"], item["hall"])
-        grouped.setdefault(key, []).append(item)
-
-    messages = []
-
-    header = (
-        "🟢 <b>VOX INITIAL SHOWTIMES REPORT</b>\n"
-        "📍 City Centre Almaza\n\n"
-    )
-
-    current = header
-
-    for (movie, hall), items in grouped.items():
-
-        block = (
-            f"🎬 <b>{html.escape(movie)}</b>\n"
-            f"🎦 Hall: {html.escape(hall)}\n"
-        )
-
-        items.sort(
-            key=lambda x: (
-                x["date"] or "9999",
-                x["time"]
-            )
-        )
-
-        for item in items:
-            block += format_showtime(item) + "\n"
-
-        block += "\n"
-
-        if len(current) + len(block) > 3500:
-            messages.append(current)
-            current = header
-
-        current += block
-
-    if current.strip() != header.strip():
-        messages.append(current)
-
-    success = True
-
-    for message in messages:
-        if not send_telegram(message):
-            success = False
-
-        time.sleep(1)
-
-    return success
 
 
 # ================= PROCESS RESULTS =================
 
 def process_results(results, state):
-
     for item_id, item in results.items():
-
         prev = state.get(item_id)
 
         # New showtime
         if not isinstance(prev, dict):
-
             msg = (
                 "🆕 <b>NEW VOX SHOWTIME!</b>\n\n"
                 f"🎬 {html.escape(item['movie'])}\n"
                 f"🎦 Hall: {html.escape(item['hall'])}\n"
-                f"📅 Date: "
-                f"{html.escape(item['date'] or 'Unknown')}\n"
+                f"📅 Date: {html.escape(item['date'] or 'Unknown')}\n"
                 f"🕒 Time: {html.escape(item['time'])}\n"
             )
 
@@ -647,13 +589,12 @@ def process_results(results, state):
             else:
                 msg += "\n⏳ Booking not confirmed yet"
 
-            if send_telegram(msg):
+            if send_telegram(msg, item["link"] if item["booking_open"] else None):
                 state[item_id] = {
                     "showtime_alerted": True,
                     "booking_alerted": item["booking_open"],
                     "booking_open": item["booking_open"]
                 }
-
                 save_state(state)
 
             time.sleep(1)
@@ -663,19 +604,17 @@ def process_results(results, state):
         was_open = prev.get("booking_open", False)
 
         if item["booking_open"] and not was_open:
-
             msg = (
                 "🎟 <b>VOX BOOKING AVAILABLE!</b>\n\n"
                 f"🎬 {html.escape(item['movie'])}\n"
                 f"🎦 Hall: {html.escape(item['hall'])}\n"
-                f"📅 Date: "
-                f"{html.escape(item['date'] or 'Unknown')}\n"
+                f"📅 Date: {html.escape(item['date'] or 'Unknown')}\n"
                 f"🕒 Time: {html.escape(item['time'])}\n\n"
                 f'<a href="{html.escape(item["link"], quote=True)}">'
                 "🎟 OPEN BOOKING</a>"
             )
 
-            if send_telegram(msg):
+            if send_telegram(msg, item["link"]):
                 prev["booking_alerted"] = True
 
             time.sleep(1)
@@ -684,89 +623,57 @@ def process_results(results, state):
             prev["booking_alerted"] = False
 
         prev["booking_open"] = item["booking_open"]
-
         state[item_id] = prev
-
         save_state(state)
 
 
 # ================= MAIN =================
 
 def main():
-
     if not TELEGRAM_TOKEN or not CHAT_ID:
         log.error("Missing TELEGRAM_TOKEN or CHAT_ID")
         return
 
     log.info("=" * 45)
-    log.info("VOX ALL MOVIES MONITOR STARTED")
+    log.info("VOX TARGETED MOVIES MONITOR STARTED")
     log.info("Time: %s", now())
     log.info("=" * 45)
 
     state = load_state()
     driver = None
+    successful_runs = 0
 
     try:
         driver = new_browser()
 
-        if not load_vox_page(driver):
-            send_telegram(
-                "🔴 <b>VOX MONITOR ERROR</b>\n"
-                "Could not load the VOX showtimes page."
-            )
-            return
+        for target in TARGETS:
+            log.info("Checking target: %s | %s", target["movie"], target["hall"])
 
-        results = extract_all_showtimes(driver)
+            if not load_vox_page(driver, target["url"]):
+                log.error("Could not load page for %s", target["movie"])
+                continue
 
-        if not results:
-            log.warning("No showtimes extracted")
+            results = extract_target_showtimes(driver, target)
+            log.info("Found %s showtime(s) for %s", len(results), target["movie"])
 
-            send_telegram(
-                "⚠️ <b>VOX MONITOR WARNING</b>\n\n"
-                "The page loaded, but no showtimes "
-                "were extracted.\n"
-                "Debug files were saved for inspection."
-            )
-
-            return
-
-        log.info(
-            "Successfully extracted %s showtimes",
-            len(results)
-        )
-
-        # First run: send complete report
-        if not state:
-
-            log.info("First run: sending initial report")
-
-            if send_initial_report(results):
-
-                for item_id, item in results.items():
-                    state[item_id] = {
-                        "showtime_alerted": True,
-                        "booking_alerted": item["booking_open"],
-                        "booking_open": item["booking_open"]
-                    }
-
-                save_state(state)
-
-            else:
-                log.error("Initial report was not fully sent")
-
-        else:
             process_results(results, state)
+            successful_runs += 1
+
+        if successful_runs > 0:
+            send_telegram(
+                "🟢 <b>VOX Monitor Status</b>\n\n"
+                f"📅 Time: {now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"🔍 Checked target movies successfully."
+            )
 
         log.info("VOX check completed successfully")
 
     except Exception as e:
         log.exception("Monitor failed")
-
         send_telegram(
             "🔴 <b>VOX MONITOR ERROR</b>\n\n"
             f"{html.escape(str(e)[:1000])}"
         )
-
         if driver:
             save_debug(driver, "main_exception")
 
@@ -778,10 +685,9 @@ def main():
                 pass
 
         save_state(state)
-
         log.info("Monitor finished")
 
 
 if __name__ == "__main__":
     main()
-    
+                            
