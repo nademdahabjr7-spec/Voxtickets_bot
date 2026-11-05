@@ -12,7 +12,6 @@ import html
 import requests
 
 from datetime import datetime
-from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 from zoneinfo import ZoneInfo
 
 from selenium import webdriver
@@ -68,20 +67,6 @@ def normalize(value):
 
 def now():
     return datetime.now(EGYPT_TZ)
-
-
-def make_date_url(url, date):
-    parts = urlsplit(url)
-    query = parse_qs(parts.query)
-    query["d"] = [date.strftime("%Y%m%d")]
-
-    return urlunsplit((
-        parts.scheme,
-        parts.netloc,
-        parts.path,
-        urlencode(query, doseq=True),
-        parts.fragment
-    ))
 
 
 def load_state():
@@ -170,7 +155,7 @@ def new_browser():
     )
 
     driver = webdriver.Chrome(options=options)
-    driver.set_page_load_timeout(20) # تم تقليل المهلة لمنع التعليق الطويل
+    driver.set_page_load_timeout(20)
 
     return driver
 
@@ -179,19 +164,10 @@ def save_debug(driver, name):
     os.makedirs(DEBUG_DIR, exist_ok=True)
 
     try:
-        driver.save_screenshot(
-            f"{DEBUG_DIR}/{name}.png"
-        )
-
-        with open(
-            f"{DEBUG_DIR}/{name}.html",
-            "w",
-            encoding="utf-8"
-        ) as f:
+        driver.save_screenshot(f"{DEBUG_DIR}/{name}.png")
+        with open(f"{DEBUG_DIR}/{name}.html", "w", encoding="utf-8") as f:
             f.write(driver.page_source)
-
         print(f"Debug snapshot saved: {name}")
-
     except Exception as error:
         print(f"Debug snapshot error: {error}")
 
@@ -201,11 +177,9 @@ def save_debug(driver, name):
 # =====================================
 
 def load_vox_page(driver, url):
-    # تم تقليل عدد المحاولات إلى محاولة واحدة أو محاولتين لتسريع العملية وعدم الانتظار طويلاً
     for attempt in range(1, 3):
         try:
             print(f"Loading page (attempt {attempt}): {url}")
-
             try:
                 driver.get(url)
             except Exception:
@@ -225,44 +199,6 @@ def load_vox_page(driver, url):
             time.sleep(2)
 
     return False
-
-
-# =====================================
-# DISCOVER AVAILABLE DATES
-# =====================================
-
-def discover_dates(driver):
-    dates = set()
-
-    today = now().date()
-    dates.add(today)
-
-    links = driver.find_elements(
-        By.CSS_SELECTOR,
-        "nav.date-filter li a[href]"
-    )
-
-    for link in links:
-        href = link.get_attribute("href") or ""
-
-        match = re.search(r"[?&]d=(\d{8})", href)
-
-        if not match:
-            continue
-
-        try:
-            date = datetime.strptime(
-                match.group(1),
-                "%Y%m%d"
-            ).date()
-
-            if date >= today:
-                dates.add(date)
-
-        except ValueError:
-            continue
-
-    return sorted(dates)
 
 
 # =====================================
@@ -294,8 +230,9 @@ def hall_matches(name, target):
 # EXTRACT SHOWTIMES
 # =====================================
 
-def extract_target_showtimes(driver, target, target_date):
+def extract_target_showtimes(driver, target):
     results = {}
+    today_str = now().date().isoformat()
 
     articles = driver.find_elements(
         By.CSS_SELECTOR,
@@ -304,16 +241,11 @@ def extract_target_showtimes(driver, target, target_date):
 
     for article in articles:
         try:
-            title_elements = article.find_elements(
-                By.TAG_NAME,
-                "h2"
-            )
-
+            title_elements = article.find_elements(By.TAG_NAME, "h2")
             if not title_elements:
                 continue
 
             title = title_elements[0].text.strip()
-
             if not movie_matches(title, target):
                 continue
 
@@ -323,73 +255,42 @@ def extract_target_showtimes(driver, target, target_date):
             )
 
             for hall_group in hall_groups:
-                strong = hall_group.find_elements(
-                    By.TAG_NAME,
-                    "strong"
-                )
-
-                hall = (
-                    strong[0].text.strip()
-                    if strong else "Standard"
-                )
+                strong = hall_group.find_elements(By.TAG_NAME, "strong")
+                hall = strong[0].text.strip() if strong else "Standard"
 
                 if not hall_matches(hall, target):
                     continue
 
-                items = hall_group.find_elements(
-                    By.CSS_SELECTOR,
-                    "ol > li"
-                )
+                items = hall_group.find_elements(By.CSS_SELECTOR, "ol > li")
 
                 for item in items:
-                    links = item.find_elements(
-                        By.CSS_SELECTOR,
-                        "a.showtime"
-                    )
-
+                    links = item.find_elements(By.CSS_SELECTOR, "a.showtime")
                     link = links[0] if links else None
 
-                    text = (
-                        link.text.strip()
-                        if link else item.text.strip()
-                    )
-
+                    text = link.text.strip() if link else item.text.strip()
                     time_match = TIME_PATTERN.search(text)
 
                     if not time_match:
                         continue
 
                     showtime = time_match.group(0).strip()
-
-                    href = (
-                        link.get_attribute("href")
-                        if link else None
-                    )
-
-                    booking_open = bool(
-                        href
-                        and href.startswith("http")
-                    )
-
-                    booking_id = (
-                        item.get_attribute("data-id") or ""
-                    )
+                    href = link.get_attribute("href") if link else None
+                    booking_open = bool(href and href.startswith("http"))
+                    booking_id = item.get_attribute("data-id") or ""
 
                     identity = "|".join([
                         target["movie"],
                         target["hall"],
-                        target_date.isoformat(),
+                        today_str,
                         booking_id or showtime.lower()
                     ])
 
-                    item_id = hashlib.sha256(
-                        identity.encode("utf-8")
-                    ).hexdigest()
+                    item_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
                     results[item_id] = {
                         "movie": target["movie"],
                         "hall": target["hall"],
-                        "date": target_date.isoformat(),
+                        "date": today_str,
                         "time": showtime,
                         "booking_open": booking_open,
                         "link": href or target["url"],
@@ -410,11 +311,9 @@ def send_new_showtime(item):
         "🆕 <b>NEW VOX SHOWTIME!</b>\n\n"
         f"🎬 {html.escape(item['movie'])}\n"
         f"🎦 Hall: {html.escape(item['hall'])}\n"
-        f"📅 Date: {item['date']}\n"
         f"🕒 Time: {html.escape(item['time'])}\n\n"
         "A new showtime has appeared on VOX."
     )
-
     return send_telegram(message, item["link"])
 
 
@@ -423,11 +322,9 @@ def send_booking_open(item):
         "🚨 <b>VOX BOOKING AVAILABLE!</b>\n\n"
         f"🎬 {html.escape(item['movie'])}\n"
         f"🎦 Hall: {html.escape(item['hall'])}\n"
-        f"📅 Date: {item['date']}\n"
         f"🕒 Time: {html.escape(item['time'])}\n\n"
         "🎟 VOX is displaying a selectable booking link!"
     )
-
     return send_telegram(message, item["link"])
 
 
@@ -438,7 +335,6 @@ def send_booking_open(item):
 def process_results(results, state):
     for item_id, item in results.items():
         previous = state.get(item_id, {})
-
         if not isinstance(previous, dict):
             previous = {}
 
@@ -447,9 +343,7 @@ def process_results(results, state):
                 previous["showtime_alerted"] = True
                 state[item_id] = previous
                 save_state(state)
-
                 print("New showtime alert sent.")
-
             time.sleep(1)
 
         if item["booking_open"] and not previous.get("booking_alerted"):
@@ -457,9 +351,7 @@ def process_results(results, state):
                 previous["booking_alerted"] = True
                 state[item_id] = previous
                 save_state(state)
-
                 print("Booking alert sent.")
-
             time.sleep(1)
 
 
@@ -479,11 +371,7 @@ def main():
     print("=" * 45)
 
     for target in TARGETS:
-        print(
-            f"\nMonitoring: {target['movie']} "
-            f"| {target['hall']}"
-        )
-
+        print(f"\nMonitoring: {target['movie']} | {target['hall']}")
         driver = new_browser()
 
         try:
@@ -492,58 +380,19 @@ def main():
                 print("Could not load VOX page.")
                 continue
 
-            dates = discover_dates(driver)
+            results = extract_target_showtimes(driver, target)
+            print(f"Found {len(results)} showtime(s).")
 
-            print(
-                "Available dates:",
-                [d.isoformat() for d in dates]
-            )
-
-            for target_date in dates:
-                url = make_date_url(
-                    target["url"],
-                    target_date
-                )
-
-                # التعديل هنا: إذا حدث Timeout أو لم تحمل الصفحة في اليوم المستقبلي، نتخطاه فوراً بدلاً من تضييع الوقت
-                if target_date != now().date():
-                    try:
-                        driver.get(url)
-                        WebDriverWait(driver, 10).until(
-                            EC.presence_of_element_located(
-                                (By.CSS_SELECTOR, "article.movie-compare")
-                            )
-                        )
-                    except Exception:
-                        print(f"Skipping date {target_date} due to timeout/not found.")
-                        continue
-
-                results = extract_target_showtimes(
-                    driver,
-                    target,
-                    target_date
-                )
-
-                print(
-                    f"{target_date}: "
-                    f"{len(results)} showtime(s) found."
-                )
-
-                process_results(results, state)
-
-                time.sleep(1)
+            process_results(results, state)
 
         except Exception as error:
-            print(
-                f"Monitoring error for {target['movie']}: {error}"
-            )
+            print(f"Monitoring error for {target['movie']}: {error}")
             save_debug(driver, "vox_error")
 
         finally:
             driver.quit()
 
     save_state(state)
-
     print("\nVOX monitoring completed.")
 
 
