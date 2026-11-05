@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # VOX Cinemas Booking Alert -> Telegram
 # Dune: Part Three
@@ -106,7 +105,7 @@ def make_id(movie, hall, showtime, link):
 # =============== STATE ===============
 
 def load_state():
-    if not os.path.exists(STATE_FILE):
+    if not os.path.exists(STATE_FILE) or os.path.getsize(STATE_FILE) == 0:
         return {"movies": {}}
 
     try:
@@ -479,10 +478,9 @@ def process_results(results, state):
 
             new_bookings.append(item)
 
-        # Update only after successful notification
-        # when new bookings are found.
-        if not newly_opened:
-            state["movies"][key] = sorted(current)
+        # Update state immediately for found movies even if no new items, 
+        # so missing/expired ones are dropped and new ones are tracked properly.
+        state["movies"][key] = sorted(current)
 
     if not new_bookings:
         log.info("No new bookings detected")
@@ -511,16 +509,7 @@ def process_results(results, state):
     message = "\n".join(lines)
 
     if send_telegram(message):
-
-        # Save new state only after Telegram succeeds.
-        for key, data in results.items():
-            if data["found"]:
-                state["movies"][key] = sorted(
-                    data["showtimes"].keys()
-                )
-
         save_state(state)
-
         log.info(
             "Successfully alerted %s new booking(s)",
             len(new_bookings)
@@ -588,4 +577,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+            
