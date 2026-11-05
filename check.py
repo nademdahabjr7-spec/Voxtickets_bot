@@ -1,313 +1,552 @@
 #!/usr/bin/env python3
-"""
-Vox Cinemas Showtimes Monitor -> Telegram alerts.
-Sends a startup test notification and monitors showtimes for specific movies.
-"""
+# VOX Cinemas Monitor -> Telegram
+# Monitors Dune: Part Three and Avengers: Doomsday (Infinity Vision)
+# Detects new showtimes and newly bookable showtimes.
 
 import os
 import re
 import json
 import time
 import hashlib
+import html
 import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+
+from datetime import datetime
+from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
+from zoneinfo import ZoneInfo
+
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
 
 # =====================================
-# TELEGRAM SETTINGS
+# SETTINGS
 # =====================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
 STATE_FILE = "showtimes_state.json"
+DEBUG_DIR = "debug"
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9,ar;q=0.8"
-}
+EGYPT_TZ = ZoneInfo("Africa/Cairo")
 
-# =====================================
-# MOVIES TO MONITOR
-# =====================================
+BASE_URL = "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza"
 
 TARGETS = [
     {
         "movie": "Dune: Part Three",
+        "match": "dune part three",
         "hall": "IMAX",
-        "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=dune-part-three",
-        "fallback_query": "site:egy.voxcinemas.com dune almaza imax"
+        "url": BASE_URL + "&m=dune-part-three",
     },
     {
-        "movie": "Avengers: Doomsday",
+        "movie": "Avengers: Doomsday (Infinity Vision)",
+        "match": "avengers doomsday",
         "hall": "MAX",
-        "url": "https://egy.voxcinemas.com/showtimes?c=city-centre-almaza&m=avengers-doomsday-infinity-vision",
-        "fallback_query": "site:egy.voxcinemas.com avengers almaza max"
-    }
+        "url": BASE_URL + "&m=avengers-doomsday-infinity-vision",
+    },
 ]
 
-# =====================================
-# DETECTION PATTERNS
-# =====================================
-
-DATE_PATTERN = re.compile(
-    r"\b(?:"
-    r"\d{4}-\d{1,2}-\d{1,2}|"
-    r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|"
-    r"(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\s*,?\s*"
-    r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+\d{1,2}|"
-    r"\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*"
-    r")\b",
-    re.I
-)
-
 TIME_PATTERN = re.compile(
-    r"\b(?:[01]?\d|2[0-3]):[0-5]\d\s*(?:am|pm)?\b"
-    r"|\b(?:1[0-2]|0?[1-9])\s*(?:am|pm)\b",
+    r"\b(?:1[0-2]|0?[1-9]):[0-5]\d\s*(?:am|pm)\b",
     re.I
 )
 
-BOOKING_PATTERN = re.compile(
-    r"\b(book now|book tickets|select seats|choose seats|"
-    r"book|tickets|select)\b",
-    re.I
-)
 
 # =====================================
-# LOAD AND SAVE MONITORING DATA
+# HELPERS
 # =====================================
+
+def normalize(value):
+    value = (value or "").lower()
+    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+
+def now():
+    return datetime.now(EGYPT_TZ)
+
+
+def make_date_url(url, date):
+    parts = urlsplit(url)
+    query = parse_qs(parts.query)
+    query["d"] = [date.strftime("%Y%m%d")]
+
+    return urlunsplit((
+        parts.scheme,
+        parts.netloc,
+        parts.path,
+        urlencode(query, doseq=True),
+        parts.fragment
+    ))
+
 
 def load_state():
     if not os.path.exists(STATE_FILE):
         return {}
 
     try:
-        with open(STATE_FILE, "r", encoding="utf-8") as file:
-            return json.load(file)
-    except (json.JSONDecodeError, OSError):
-        print("⚠️ Could not read saved state.")
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        print("WARNING: State file could not be read.")
         return {}
 
 
 def save_state(state):
-    temp_file = STATE_FILE + ".tmp"
+    temp = STATE_FILE + ".tmp"
 
-    with open(temp_file, "w", encoding="utf-8") as file:
-        json.dump(state, file, ensure_ascii=False, indent=2)
+    with open(temp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
 
-    os.replace(temp_file, STATE_FILE)
+    os.replace(temp, STATE_FILE)
 
 
 # =====================================
-# TELEGRAM NOTIFICATIONS
+# TELEGRAM
 # =====================================
 
-def send_telegram(session, message):
+def send_telegram(message, button_url=None):
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("Missing Telegram credentials.")
+        return False
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
     payload = {
         "chat_id": CHAT_ID,
         "text": message,
+        "parse_mode": "HTML",
         "disable_web_page_preview": True,
-        "parse_mode": "Markdown"
     }
 
+    if button_url:
+        payload["reply_markup"] = {
+            "inline_keyboard": [[
+                {
+                    "text": "🎟 Open VOX Booking",
+                    "url": button_url
+                }
+            ]]
+        }
+
     try:
-        response = session.post(url, json=payload, timeout=20)
+        response = requests.post(url, json=payload, timeout=20)
         response.raise_for_status()
 
         if response.json().get("ok"):
-            print("✅ Telegram notification sent.")
+            print("Telegram message sent.")
             return True
 
-        print("❌ Telegram rejected the message.")
+        print("Telegram rejected the message.")
         return False
 
-    except requests.RequestException as error:
-        print(f"❌ Telegram error: {error}")
+    except Exception as error:
+        print(f"Telegram error: {error}")
         return False
 
 
 # =====================================
-# HALL DETECTION
+# CHROME
 # =====================================
 
-def hall_matches(text, hall):
-    if hall == "IMAX":
-        return bool(re.search(r"\bIMAX\b", text, re.I))
-    return bool(re.search(r"\bMAX\b", text, re.I))
+def new_browser():
+    options = Options()
+
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+
+    driver = webdriver.Chrome(options=options)
+    driver.set_page_load_timeout(35)
+
+    return driver
 
 
-# =====================================
-# EXTRACT ACTUAL SHOWTIME CANDIDATES
-# =====================================
-
-def extract_showtimes(html, target):
-    soup = BeautifulSoup(html, "html.parser")
-
-    for element in soup(["script", "style", "noscript", "svg"]):
-        element.decompose()
-
-    candidates = soup.find_all(["div", "li", "article", "section"])
-    candidates.sort(key=lambda tag: len(tag.get_text(" ", strip=True)))
-
-    found = {}
-
-    for tag in candidates:
-        text = tag.get_text(" ", strip=True)
-
-        if not text or len(text) > 1800:
-            continue
-
-        if not hall_matches(text, target["hall"]):
-            continue
-
-        dates = DATE_PATTERN.findall(text)
-        times = TIME_PATTERN.findall(text)
-
-        if not dates or not times:
-            continue
-
-        booking_links = []
-        for link in tag.find_all("a", href=True):
-            href = urljoin(target["url"], link["href"])
-            label = link.get_text(" ", strip=True)
-
-            if (
-                BOOKING_PATTERN.search(label)
-                or "book" in href.lower()
-                or "seat" in href.lower()
-            ):
-                booking_links.append(href)
-
-        if not BOOKING_PATTERN.search(text) and not booking_links:
-            continue
-
-        date_value = dates[0].strip()
-        time_value = times[0].strip()
-        booking_link = booking_links[0] if booking_links else target["url"]
-
-        unique_text = f"{target['movie']}|{target['hall']}|{date_value}|{time_value}"
-        showtime_id = hashlib.sha256(unique_text.lower().encode("utf-8")).hexdigest()
-
-        found[showtime_id] = {
-            "movie": target["movie"],
-            "hall": target["hall"],
-            "date": date_value,
-            "time": time_value,
-            "link": booking_link
-        }
-
-    return found
-
-
-# =====================================
-# CHECK TARGET (WITH FALLBACK)
-# =====================================
-
-def check_target(session, target):
-    print(f"\n⏳ Checking {target['movie']} ({target['hall']})...")
-    html = ""
-    success = False
+def save_debug(driver, name):
+    os.makedirs(DEBUG_DIR, exist_ok=True)
 
     try:
-        response = session.get(target["url"], timeout=15)
-        if response.status_code == 200 and len(response.text) > 500:
-            html = response.text
-            success = True
-            print("🎯 Direct fetch successful.")
-    except Exception:
-        print("⚠️ Direct fetch blocked/timeout, switching to smart search fallback...")
+        driver.save_screenshot(
+            f"{DEBUG_DIR}/{name}.png"
+        )
 
-    if not success:
-        try:
-            search_url = f"https://html.duckduckgo.com/html/?q={target['fallback_query']}"
-            response = session.get(search_url, timeout=15)
-            if response.status_code in (200, 202) and len(response.text) > 300:
-                html = response.text
-                success = True
-                print("🔍 Fallback search fetch successful.")
-            else:
-                print(f"❌ Search fallback returned HTTP {response.status_code}")
-        except requests.RequestException as error:
-            print(f"❌ Connection error on fallback: {error}")
-            return None
+        with open(
+            f"{DEBUG_DIR}/{name}.html",
+            "w",
+            encoding="utf-8"
+        ) as f:
+            f.write(driver.page_source)
 
-    if not success or len(html) < 200:
-        print("⚠️ Invalid or empty page content.")
-        return None
+        print(f"Debug snapshot saved: {name}")
 
-    showtimes = extract_showtimes(html, target)
-    print(f"🎯 Found {len(showtimes)} potential showtimes.")
-    return showtimes
+    except Exception as error:
+        print(f"Debug snapshot error: {error}")
 
 
 # =====================================
-# MAIN MONITORING SYSTEM
+# LOAD VOX PAGE
+# =====================================
+
+def load_vox_page(driver, url):
+    for attempt in range(1, 4):
+        try:
+            print(f"Loading page (attempt {attempt}): {url}")
+
+            try:
+                driver.get(url)
+            except Exception:
+                # Some pages may finish loading despite a timeout.
+                pass
+
+            WebDriverWait(driver, 25).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, "article.movie-compare")
+                )
+            )
+
+            time.sleep(2)
+            return True
+
+        except Exception as error:
+            print(f"Page load failed: {type(error).__name__}")
+            time.sleep(3)
+
+    return False
+
+
+# =====================================
+# DISCOVER AVAILABLE DATES
+# =====================================
+
+def discover_dates(driver):
+    dates = set()
+
+    today = now().date()
+    dates.add(today)
+
+    links = driver.find_elements(
+        By.CSS_SELECTOR,
+        "nav.date-filter li a[href]"
+    )
+
+    for link in links:
+        href = link.get_attribute("href") or ""
+
+        match = re.search(r"[?&]d=(\d{8})", href)
+
+        if not match:
+            continue
+
+        try:
+            date = datetime.strptime(
+                match.group(1),
+                "%Y%m%d"
+            ).date()
+
+            if date >= today:
+                dates.add(date)
+
+        except ValueError:
+            continue
+
+    return sorted(dates)
+
+
+# =====================================
+# MOVIE MATCHING
+# =====================================
+
+def movie_matches(title, target):
+    normalized_title = normalize(title)
+
+    if target["match"] not in normalized_title:
+        return False
+
+    if target["movie"].startswith("Avengers"):
+        return "infinity vision" in normalized_title
+
+    return True
+
+
+def hall_matches(name, target):
+    normalized = normalize(name)
+
+    if target["hall"] == "IMAX":
+        return "imax" in normalized
+
+    # Infinity Vision is the movie format; MAX is the
+    # requested auditorium label. Accept either label
+    # because VOX may display them differently.
+    return "max" in normalized or "infinity vision" in normalized
+
+
+# =====================================
+# EXTRACT SHOWTIMES
+# =====================================
+
+def extract_target_showtimes(driver, target, target_date):
+    results = {}
+
+    articles = driver.find_elements(
+        By.CSS_SELECTOR,
+        "article.movie-compare"
+    )
+
+    for article in articles:
+        try:
+            title_elements = article.find_elements(
+                By.TAG_NAME,
+                "h2"
+            )
+
+            if not title_elements:
+                continue
+
+            title = title_elements[0].text.strip()
+
+            if not movie_matches(title, target):
+                continue
+
+            hall_groups = article.find_elements(
+                By.CSS_SELECTOR,
+                "div.dates ol.showtimes > li"
+            )
+
+            for hall_group in hall_groups:
+                strong = hall_group.find_elements(
+                    By.TAG_NAME,
+                    "strong"
+                )
+
+                hall = (
+                    strong[0].text.strip()
+                    if strong else "Standard"
+                )
+
+                if not hall_matches(hall, target):
+                    continue
+
+                items = hall_group.find_elements(
+                    By.CSS_SELECTOR,
+                    "ol > li"
+                )
+
+                for item in items:
+                    links = item.find_elements(
+                        By.CSS_SELECTOR,
+                        "a.showtime"
+                    )
+
+                    link = links[0] if links else None
+
+                    text = (
+                        link.text.strip()
+                        if link else item.text.strip()
+                    )
+
+                    time_match = TIME_PATTERN.search(text)
+
+                    if not time_match:
+                        continue
+
+                    showtime = time_match.group(0).strip()
+
+                    href = (
+                        link.get_attribute("href")
+                        if link else None
+                    )
+
+                    booking_open = bool(
+                        href
+                        and href.startswith("http")
+                    )
+
+                    booking_id = (
+                        item.get_attribute("data-id") or ""
+                    )
+
+                    identity = "|".join([
+                        target["movie"],
+                        target["hall"],
+                        target_date.isoformat(),
+                        booking_id or showtime.lower()
+                    ])
+
+                    item_id = hashlib.sha256(
+                        identity.encode("utf-8")
+                    ).hexdigest()
+
+                    results[item_id] = {
+                        "movie": target["movie"],
+                        "hall": target["hall"],
+                        "date": target_date.isoformat(),
+                        "time": showtime,
+                        "booking_open": booking_open,
+                        "link": href or target["url"],
+                    }
+
+        except Exception as error:
+            print(f"Movie extraction error: {error}")
+
+    return results
+
+
+# =====================================
+# NOTIFICATIONS
+# =====================================
+
+def send_new_showtime(item):
+    message = (
+        "🆕 <b>NEW VOX SHOWTIME!</b>\n\n"
+        f"🎬 {html.escape(item['movie'])}\n"
+        f"🎦 Hall: {html.escape(item['hall'])}\n"
+        f"📅 Date: {item['date']}\n"
+        f"🕒 Time: {html.escape(item['time'])}\n\n"
+        "A new showtime has appeared on VOX."
+    )
+
+    return send_telegram(message, item["link"])
+
+
+def send_booking_open(item):
+    message = (
+        "🚨 <b>VOX BOOKING AVAILABLE!</b>\n\n"
+        f"🎬 {html.escape(item['movie'])}\n"
+        f"🎦 Hall: {html.escape(item['hall'])}\n"
+        f"📅 Date: {item['date']}\n"
+        f"🕒 Time: {html.escape(item['time'])}\n\n"
+        "🎟 VOX is displaying a selectable booking link!"
+    )
+
+    return send_telegram(message, item["link"])
+
+
+# =====================================
+# PROCESS RESULTS
+# =====================================
+
+def process_results(results, state):
+    for item_id, item in results.items():
+        previous = state.get(item_id, {})
+
+        if not isinstance(previous, dict):
+            previous = {}
+
+        # First notification: new showtime
+        if not previous.get("showtime_alerted"):
+            if send_new_showtime(item):
+                previous["showtime_alerted"] = True
+                state[item_id] = previous
+                save_state(state)
+
+                print("New showtime alert sent.")
+
+            time.sleep(1)
+
+        # Second notification: booking becomes available
+        if item["booking_open"] and not previous.get("booking_alerted"):
+            if send_booking_open(item):
+                previous["booking_alerted"] = True
+                state[item_id] = previous
+                save_state(state)
+
+                print("Booking alert sent.")
+
+            time.sleep(1)
+
+
+# =====================================
+# MAIN MONITOR
 # =====================================
 
 def main():
     if not TELEGRAM_TOKEN or not CHAT_ID:
-        print("❌ Missing Telegram credentials.")
-        return
+        raise RuntimeError("Telegram secrets are missing.")
 
     state = load_state()
-    session = requests.Session()
-    session.headers.update(HEADERS)
 
-    # 🚀 رسالة اختبارية فورية لتأكيد عمل البوت وتوصيل الإشعارات عند كل تشغيل
-    send_telegram(
-        session,
-        "🤖 *تم تشغيل نظام مراقبة فوكس سينما بنجاح!*\n\n"
-        "✨ السكريبت يعمل الآن ويقوم بفحص المواعيد الحالية للحفلات."
-    )
+    print("=" * 45)
+    print("VOX CINEMAS MONITOR STARTED")
+    print("Egypt time:", now().strftime("%Y-%m-%d %H:%M:%S"))
+    print("=" * 45)
 
     for target in TARGETS:
-        showtimes = check_target(session, target)
+        print(
+            f"\nMonitoring: {target['movie']} "
+            f"| {target['hall']}"
+        )
 
-        if showtimes is None:
-            continue
+        driver = new_browser()
 
-        movie_key = target["movie"]
-        if movie_key not in state:
-            state[movie_key] = {}
+        try:
+            if not load_vox_page(driver, target["url"]):
+                save_debug(driver, "vox_initial")
+                print("Could not load VOX page.")
+                continue
 
-        previous = state[movie_key]
-        new_ids = set(showtimes.keys()) - set(previous.keys())
+            dates = discover_dates(driver)
 
-        for showtime_id in new_ids:
-            item = showtimes[showtime_id]
-
-            message = (
-                "🚨 *NEW VOX SHOWTIME DETECTED!* 🚨\n\n"
-                f"🎬 Movie: {item['movie']}\n"
-                f"🎦 Hall: {item['hall']}\n"
-                f"📅 Date: {item['date']}\n"
-                f"🕒 Time: {item['time']}\n\n"
-                "🎟️ *Booking link:*\n"
-                f"{item['link']}"
+            print(
+                "Available dates:",
+                [d.isoformat() for d in dates]
             )
 
-            if send_telegram(session, message):
-                state[movie_key][showtime_id] = item
-                save_state(state)
+            for target_date in dates:
+                url = make_date_url(
+                    target["url"],
+                    target_date
+                )
 
-            time.sleep(2)
+                if target_date != now().date():
+                    if not load_vox_page(driver, url):
+                        save_debug(
+                            driver,
+                            f"vox_{target_date.isoformat()}"
+                        )
+                        continue
 
-        if not new_ids:
-            print(f"⏳ No new showtimes for {movie_key}.")
+                results = extract_target_showtimes(
+                    driver,
+                    target,
+                    target_date
+                )
 
-        time.sleep(3)
+                print(
+                    f"{target_date}: "
+                    f"{len(results)} showtime(s) found."
+                )
+
+                process_results(results, state)
+
+                time.sleep(1)
+
+        except Exception as error:
+            print(
+                f"Monitoring error for {target['movie']}: {error}"
+            )
+            save_debug(driver, "vox_error")
+
+        finally:
+            driver.quit()
 
     save_state(state)
-    session.close()
-    print("\n✅ Monitoring completed.")
+
+    print("\nVOX monitoring completed.")
 
 
 if __name__ == "__main__":
     main()
-  
+    
