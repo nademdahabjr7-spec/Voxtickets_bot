@@ -1,4 +1,20 @@
 {
   "Dune: Part Three": {},
-  "Avengers: Doomsday": {}
+  "Avengers: Doomsday": {},
+  "1b6f42dace9a1d1a2ccad09586aec712a3b2722df9736754474032c4f5c79a0d": {
+    "showtime_alerted": true,
+    "booking_alerted": true
+  },
+  "308f2385ef9796997840eebf759c3e843caa45452189df15d7742018f22a4198": {
+    "showtime_alerted": true,
+    "booking_alerted": true
+  },
+  "7662dad5140ea256bbd274b2e9a940a7ef641d92179295818cd3bd6ec92d81b6": {
+    "showtime_alerted": true,
+    "booking_alerted": true
+  },
+  "bb6494e404348b942371d80b87ac24e698e2d8e16057840cec4f1424479221d4": {
+    "showtime_alerted": true,
+    "booking_alerted": true
+  }
 }
