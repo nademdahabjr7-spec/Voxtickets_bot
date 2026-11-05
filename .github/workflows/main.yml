@@ -1,5 +1,4 @@
-
-name: VOX Cinemas Showtimes Monitor
+Name: VOX Cinemas Showtimes Monitor
 
 on:
   workflow_dispatch:
@@ -26,7 +25,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
 
       - name: Install Dependencies
         run: |
