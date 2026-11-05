@@ -293,5 +293,25 @@
     "showtime_alerted": true,
     "booking_alerted": true,
     "booking_open": true
+  },
+  "8a2d3ac547bbcafd9b4239b0a8f0a8fd9b0561cdd84188d628bf7e057cd193ec": {
+    "showtime_alerted": true,
+    "booking_alerted": true,
+    "booking_open": true
+  },
+  "4c290f5b06d1929213a4f83c0edef6a8df454b422b9bcf86300954126aae8a5f": {
+    "showtime_alerted": true,
+    "booking_alerted": true,
+    "booking_open": true
+  },
+  "69b1e921be5b94368fa07c4b435bbc1725703c9181b683b1d64d619ab90b5629": {
+    "showtime_alerted": true,
+    "booking_alerted": true,
+    "booking_open": true
+  },
+  "671e542c64ecec80d795f2d9a8ca3f7c7a295a4d0309d58fb0e44924229681bc": {
+    "showtime_alerted": true,
+    "booking_alerted": true,
+    "booking_open": true
   }
 }
