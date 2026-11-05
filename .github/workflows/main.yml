@@ -1,4 +1,4 @@
-Name: VOX Cinemas Showtimes Monitor
+name: VOX Cinemas Showtimes Monitor
 
 on:
   workflow_dispatch:
