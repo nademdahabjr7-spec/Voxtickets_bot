@@ -221,5 +221,57 @@ def fetch_movies(session):
 
 def main():
     if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("❌ Missing Telegram credentials.")
+        return
 
-        
+    state = load_state()
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    send_telegram(
+        session,
+        "🤖 **بدء فحص جميع أفلام وحفلات فوكس سينما (ألماظة)...**"
+    )
+
+    showtimes = fetch_movies(session)
+
+    if showtimes is None:
+        print("⚠️ Could not retrieve showtimes.")
+        session.close()
+        return
+
+    if "all_shows" not in state:
+        state["all_shows"] = {}
+
+    previous = state["all_shows"]
+    new_ids = set(showtimes.keys()) - set(previous.keys())
+
+    if new_ids:
+        print(f"✨ Found {len(new_ids)} new showtimes!")
+        for showtime_id in new_ids:
+            item = showtimes[showtime_id]
+
+            message = (
+               "🎬 **حفلة جديدة متاحة في فوكس ألماظة!** 🎬\n\n"
+               f"📌 الفيلم: {item['movie']}\n"
+               f"🎦 القاعة: {item['hall']}\n"
+               f"📅 التاريخ: {item['date']}\n"
+               f"🕒 الوقت: {item['time']}\n\n"
+               f"🎟️ **رابط الحجز:**\n{item['link']}"
+            )
+
+            if send_telegram(session, message):
+                state["all_shows"][showtime_id] = item
+                save_state(state)
+
+            time.sleep(2)
+    else:
+        print("⏳ No new showtimes found since last check.")
+
+    save_state(state)
+    session.close()
+    print("\n✅ Comprehensive monitoring completed.")
+
+if __name__ == "__main__":
+    main()
+    
